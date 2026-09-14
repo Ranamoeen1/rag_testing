@@ -1,19 +1,15 @@
-import io
 import os
 import re
-import hashlib
-from typing import Dict, List, Tuple, Optional
-from urllib.parse import urlparse, parse_qs
+import tempfile
+from pathlib import Path
 
-import numpy as np
-import requests
-import streamlit as st
 import faiss
+import gdown
+import numpy as np
+import streamlit as st
 
-from docx import Document as DocxDocument
+from docx import Document
 from pypdf import PdfReader
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
 from sentence_transformers import SentenceTransformer
 from groq import Groq
 
@@ -22,169 +18,28 @@ from groq import Groq
 # CONFIGURATION
 # ============================================================
 
+CHUNK_SIZE = 800
+CHUNK_OVERLAP = 150
+TOP_K = 5
+
+EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+GROQ_MODEL = "llama-3.1-8b-instant"
+
+
+# ============================================================
+# PAGE CONFIG
+# ============================================================
+
 st.set_page_config(
     page_title="AI Document Assistant",
     page_icon="📚",
-    layout="wide",
-    initial_sidebar_state="expanded",
+    layout="wide"
 )
 
-
-SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".txt", ".md", ".markdown"}
-
-DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-
-# Use a currently available Groq model through the Groq API.
-# This can also be overridden through Streamlit secrets.
-DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b"
-CHUNK_SIZE = 900
-CHUNK_OVERLAP = 150
-
-SEMANTIC_TOP_K = 8
-KEYWORD_TOP_K = 8
-FINAL_TOP_K = 6
-
-# Hybrid weighting
-SEMANTIC_WEIGHT = 0.65
-KEYWORD_WEIGHT = 0.35
-
-
-# ============================================================
-# CUSTOM STYLING
-# ============================================================
-
-st.markdown(
-    """
-    <style>
-
-    /* Main page */
-    .main {
-        background-color: #f8fafc;
-    }
-
-    .block-container {
-        max-width: 1200px;
-        padding-top: 2rem;
-        padding-bottom: 3rem;
-    }
-
-    /* Header */
-    .app-header {
-        padding: 1.5rem 1.8rem;
-        border-radius: 18px;
-        background: linear-gradient(
-            135deg,
-            #111827 0%,
-            #1e293b 100%
-        );
-        color: white;
-        margin-bottom: 1.5rem;
-        box-shadow: 0 10px 30px rgba(15, 23, 42, 0.12);
-    }
-
-    .app-header h1 {
-        margin: 0;
-        font-size: 2rem;
-        font-weight: 750;
-        letter-spacing: -0.03em;
-    }
-
-    .app-header p {
-        margin: 0.55rem 0 0;
-        color: #cbd5e1;
-        font-size: 1rem;
-    }
-
-    /* Cards */
-    .info-card {
-        padding: 1rem 1.2rem;
-        border: 1px solid #e2e8f0;
-        border-radius: 15px;
-        background: white;
-        margin-bottom: 1rem;
-    }
-
-    /* Metrics */
-    .metric-card {
-        padding: 1rem;
-        background: white;
-        border: 1px solid #e2e8f0;
-        border-radius: 15px;
-        text-align: center;
-    }
-
-    .metric-number {
-        font-size: 1.5rem;
-        font-weight: 750;
-        color: #0f172a;
-    }
-
-    .metric-label {
-        font-size: 0.82rem;
-        color: #64748b;
-        margin-top: 0.2rem;
-    }
-
-    /* Buttons */
-    .stButton > button {
-        border-radius: 10px;
-        font-weight: 650;
-        min-height: 2.7rem;
-        border: 1px solid #cbd5e1;
-        transition: all 0.15s ease;
-    }
-
-    .stButton > button:hover {
-        transform: translateY(-1px);
-        border-color: #64748b;
-    }
-
-    /* File uploader */
-    [data-testid="stFileUploader"] {
-        border-radius: 15px;
-    }
-
-    /* Chat messages */
-    [data-testid="stChatMessage"] {
-        border-radius: 15px;
-        margin-bottom: 0.75rem;
-    }
-
-    /* Expander */
-    .streamlit-expanderHeader {
-        font-weight: 650;
-    }
-
-    /* Source cards */
-    .source-card {
-        border: 1px solid #e2e8f0;
-        border-radius: 12px;
-        padding: 0.9rem;
-        margin-bottom: 0.7rem;
-        background: #ffffff;
-    }
-
-    .source-title {
-        font-weight: 700;
-        color: #0f172a;
-        margin-bottom: 0.3rem;
-    }
-
-    .source-meta {
-        color: #64748b;
-        font-size: 0.82rem;
-        margin-bottom: 0.5rem;
-    }
-
-    .source-text {
-        color: #334155;
-        font-size: 0.9rem;
-        line-height: 1.55;
-    }
-
-    </style>
-    """,
-    unsafe_allow_html=True,
+st.title("📚 AI Document Assistant")
+st.write(
+    "Upload documents or load them from Google Drive, then ask questions "
+    "about their content."
 )
 
 
@@ -192,269 +47,159 @@ st.markdown(
 # SESSION STATE
 # ============================================================
 
-def initialize_session_state():
-    """Initialize all persistent application state."""
+if "documents" not in st.session_state:
+    st.session_state.documents = []
 
-    defaults = {
-        "documents": [],
-        "chunks": [],
-        "embeddings": None,
-        "faiss_index": None,
-        "tfidf_vectorizer": None,
-        "tfidf_matrix": None,
-        "processed_hash": None,
-        "chat_history": [],
-        "drive_files": [],
-        "processed_source": None,
-    }
+if "chunks" not in st.session_state:
+    st.session_state.chunks = []
 
-    for key, value in defaults.items():
-        if key not in st.session_state:
-            st.session_state[key] = value
+if "embeddings" not in st.session_state:
+    st.session_state.embeddings = None
 
+if "faiss_index" not in st.session_state:
+    st.session_state.faiss_index = None
 
-initialize_session_state()
+if "processed" not in st.session_state:
+    st.session_state.processed = False
 
 
 # ============================================================
-# SECRET / CONFIG HELPERS
+# LOAD EMBEDDING MODEL ONCE
 # ============================================================
 
-def get_secret(name: str, default: Optional[str] = None) -> Optional[str]:
-    """
-    Read a secret from Streamlit secrets first, then environment variables.
-    """
-
-    try:
-        if name in st.secrets:
-            value = st.secrets[name]
-            if value:
-                return str(value)
-    except Exception:
-        pass
-
-    value = os.getenv(name)
-
-    if value:
-        return value
-
-    return default
+@st.cache_resource
+def load_embedding_model():
+    return SentenceTransformer(EMBEDDING_MODEL)
 
 
-def get_groq_api_key() -> Optional[str]:
-    return get_secret("GROQ_API_KEY")
-
-
-def get_drive_api_key() -> Optional[str]:
-    """
-    Optional.
-
-    This is only needed when enumerating files inside a public Google Drive
-    folder using the Google Drive API.
-
-    Individual public files can be downloaded without it.
-    """
-    return get_secret("GOOGLE_DRIVE_API_KEY")
-
-
-def get_groq_model() -> str:
-    return get_secret(
-        "GROQ_MODEL",
-        DEFAULT_GROQ_MODEL
-    )
-
-
-# ============================================================
-# FILE HELPERS
-# ============================================================
-
-def get_extension(filename: str) -> str:
-    return os.path.splitext(filename.lower())[1]
-
-
-def is_supported_file(filename: str) -> bool:
-    return get_extension(filename) in SUPPORTED_EXTENSIONS
-
-
-def calculate_bytes_hash(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
+embedding_model = load_embedding_model()
 
 
 # ============================================================
 # DOCUMENT EXTRACTION
 # ============================================================
 
-def extract_pdf_text(file_bytes: bytes, filename: str) -> List[Dict]:
+def extract_pdf(file_path, filename):
     """
-    Extract PDF text page-by-page.
-
-    Page numbers are preserved in metadata.
-    """
-
-    results = []
-
-    try:
-        reader = PdfReader(io.BytesIO(file_bytes))
-
-        for page_number, page in enumerate(reader.pages, start=1):
-            text = page.extract_text() or ""
-
-            text = text.strip()
-
-            if text:
-                results.append(
-                    {
-                        "text": text,
-                        "metadata": {
-                            "filename": filename,
-                            "file_type": "pdf",
-                            "page": page_number,
-                        },
-                    }
-                )
-
-    except Exception as exc:
-        raise ValueError(
-            f"Failed to extract PDF '{filename}': {exc}"
-        )
-
-    return results
-
-
-def extract_docx_text(file_bytes: bytes, filename: str) -> List[Dict]:
-    """
-    Extract text from DOCX paragraphs.
+    Extract text from PDF.
+    Keeps page number for every extracted page.
     """
 
-    try:
-        document = DocxDocument(io.BytesIO(file_bytes))
+    documents = []
 
-        paragraphs = []
+    reader = PdfReader(file_path)
 
-        for paragraph in document.paragraphs:
-            text = paragraph.text.strip()
+    for page_number, page in enumerate(reader.pages, start=1):
 
-            if text:
-                paragraphs.append(text)
+        text = page.extract_text() or ""
 
-        text = "\n".join(paragraphs).strip()
-
-        if not text:
-            return []
-
-        return [
-            {
+        if text.strip():
+            documents.append({
                 "text": text,
-                "metadata": {
-                    "filename": filename,
-                    "file_type": "docx",
-                    "page": None,
-                },
-            }
-        ]
+                "filename": filename,
+                "page": page_number
+            })
 
-    except Exception as exc:
-        raise ValueError(
-            f"Failed to extract DOCX '{filename}': {exc}"
-        )
+    return documents
 
 
-def extract_text_file(file_bytes: bytes, filename: str) -> List[Dict]:
+def extract_docx(file_path, filename):
     """
-    Extract TXT / Markdown content.
+    Extract text from DOCX.
+    DOCX does not provide reliable page numbers here,
+    so page is stored as None.
     """
 
-    try:
-        text = file_bytes.decode("utf-8", errors="replace").strip()
+    document = Document(file_path)
 
-        if not text:
-            return []
+    paragraphs = []
 
-        extension = get_extension(filename)
+    for paragraph in document.paragraphs:
 
-        return [
-            {
-                "text": text,
-                "metadata": {
-                    "filename": filename,
-                    "file_type": extension.lstrip("."),
-                    "page": None,
-                },
-            }
-        ]
+        text = paragraph.text.strip()
 
-    except Exception as exc:
-        raise ValueError(
-            f"Failed to read text file '{filename}': {exc}"
-        )
+        if text:
+            paragraphs.append(text)
+
+    full_text = "\n".join(paragraphs)
+
+    if not full_text.strip():
+        return []
+
+    return [{
+        "text": full_text,
+        "filename": filename,
+        "page": None
+    }]
 
 
-def extract_document(file_bytes: bytes, filename: str) -> List[Dict]:
+def extract_txt(file_path, filename):
     """
-    Automatically select the correct document parser.
+    Extract text from TXT.
     """
 
-    extension = get_extension(filename)
+    with open(file_path, "r", encoding="utf-8", errors="ignore") as file:
+        text = file.read()
+
+    if not text.strip():
+        return []
+
+    return [{
+        "text": text,
+        "filename": filename,
+        "page": None
+    }]
+
+
+def extract_md(file_path, filename):
+    """
+    Extract text from Markdown.
+    """
+
+    with open(file_path, "r", encoding="utf-8", errors="ignore") as file:
+        text = file.read()
+
+    if not text.strip():
+        return []
+
+    return [{
+        "text": text,
+        "filename": filename,
+        "page": None
+    }]
+
+
+def extract_document(file_path, filename):
+    """
+    Select the correct extraction function based on extension.
+    """
+
+    extension = Path(filename).suffix.lower()
 
     if extension == ".pdf":
-        return extract_pdf_text(file_bytes, filename)
+        return extract_pdf(file_path, filename)
 
-    if extension == ".docx":
-        return extract_docx_text(file_bytes, filename)
+    elif extension == ".docx":
+        return extract_docx(file_path, filename)
 
-    if extension in {".txt", ".md", ".markdown"}:
-        return extract_text_file(file_bytes, filename)
+    elif extension == ".txt":
+        return extract_txt(file_path, filename)
 
-    raise ValueError(
-        f"Unsupported file type: {filename}"
-    )
+    elif extension == ".md":
+        return extract_md(file_path, filename)
+
+    return []
 
 
 # ============================================================
 # CHUNKING
 # ============================================================
 
-def split_text(
-    text: str,
-    chunk_size: int = CHUNK_SIZE,
-    overlap: int = CHUNK_OVERLAP,
-) -> List[str]:
+def chunk_text(documents):
     """
-    Simple overlapping word-based chunking.
+    Split extracted documents into overlapping chunks.
 
-    Keeping this implementation straightforward makes the RAG
-    pipeline easy to explain during teaching/presentation.
-    """
-
-    words = text.split()
-
-    if not words:
-        return []
-
-    chunks = []
-
-    start = 0
-
-    while start < len(words):
-        end = min(start + chunk_size, len(words))
-
-        chunk = " ".join(words[start:end]).strip()
-
-        if chunk:
-            chunks.append(chunk)
-
-        if end >= len(words):
-            break
-
-        start = end - overlap
-
-    return chunks
-
-
-def chunk_documents(documents: List[Dict]) -> List[Dict]:
-    """
-    Split extracted documents into overlapping chunks while
-    preserving the original metadata.
+    Metadata such as filename and page is preserved.
     """
 
     chunks = []
@@ -462,22 +207,26 @@ def chunk_documents(documents: List[Dict]) -> List[Dict]:
     for document in documents:
 
         text = document["text"]
-        metadata = document["metadata"]
+        filename = document["filename"]
+        page = document["page"]
 
-        text_chunks = split_text(text)
+        start = 0
 
-        for chunk_id, chunk_text in enumerate(text_chunks):
+        while start < len(text):
 
-            chunk_metadata = dict(metadata)
+            end = start + CHUNK_SIZE
 
-            chunk_metadata["chunk_id"] = chunk_id
+            chunk = text[start:end].strip()
 
-            chunks.append(
-                {
-                    "text": chunk_text,
-                    "metadata": chunk_metadata,
-                }
-            )
+            if chunk:
+
+                chunks.append({
+                    "text": chunk,
+                    "filename": filename,
+                    "page": page
+                })
+
+            start += CHUNK_SIZE - CHUNK_OVERLAP
 
     return chunks
 
@@ -486,863 +235,247 @@ def chunk_documents(documents: List[Dict]) -> List[Dict]:
 # EMBEDDINGS
 # ============================================================
 
-@st.cache_resource(show_spinner=False)
-def load_embedding_model():
+def create_embeddings(chunks):
     """
-    Load the local Sentence Transformers embedding model once.
+    Create embeddings once for all chunks.
     """
-
-    return SentenceTransformer(DEFAULT_EMBEDDING_MODEL)
-
-
-def create_embeddings(texts: List[str]) -> np.ndarray:
-    """
-    Generate local embeddings.
-
-    Groq is NOT used for embeddings.
-    """
-
-    model = load_embedding_model()
-
-    embeddings = model.encode(
-        texts,
-        normalize_embeddings=True,
-        show_progress_bar=False,
-    )
-
-    return np.asarray(
-        embeddings,
-        dtype="float32",
-    )
-
-
-# ============================================================
-# SEARCH INDEX
-# ============================================================
-
-def build_search_index(chunks: List[Dict]):
-    """
-    Build both:
-
-    1. FAISS semantic/vector index
-    2. TF-IDF keyword index
-    """
-
-    if not chunks:
-        raise ValueError("No chunks available for indexing.")
 
     texts = [chunk["text"] for chunk in chunks]
 
-    # Create semantic embeddings.
-    embeddings = create_embeddings(texts)
+    embeddings = embedding_model.encode(
+        texts,
+        convert_to_numpy=True,
+        normalize_embeddings=True,
+        show_progress_bar=False
+    )
 
-    # FAISS inner-product search works as cosine similarity
-    # because embeddings are normalized.
+    return embeddings.astype("float32")
+
+
+# ============================================================
+# FAISS INDEX
+# ============================================================
+
+def create_faiss_index(embeddings):
+    """
+    Create a FAISS cosine-similarity index.
+
+    Because embeddings are normalized, inner product
+    behaves like cosine similarity.
+    """
+
     dimension = embeddings.shape[1]
 
-    faiss_index = faiss.IndexFlatIP(dimension)
+    index = faiss.IndexFlatIP(dimension)
 
-    faiss_index.add(embeddings)
+    index.add(embeddings)
 
-    # TF-IDF provides keyword-oriented retrieval.
-    vectorizer = TfidfVectorizer(
-        lowercase=True,
-        stop_words="english",
-        ngram_range=(1, 2),
-        max_features=50000,
-    )
-
-    tfidf_matrix = vectorizer.fit_transform(texts)
-
-    return (
-        embeddings,
-        faiss_index,
-        vectorizer,
-        tfidf_matrix,
-    )
-
-
-# ============================================================
-# SEMANTIC SEARCH
-# ============================================================
-
-def semantic_search(
-    query: str,
-    top_k: int = SEMANTIC_TOP_K,
-) -> List[Tuple[int, float]]:
-    """
-    Semantic search using FAISS.
-    """
-
-    if st.session_state.faiss_index is None:
-        return []
-
-    model = load_embedding_model()
-
-    query_embedding = model.encode(
-        [query],
-        normalize_embeddings=True,
-        show_progress_bar=False,
-    )
-
-    query_embedding = np.asarray(
-        query_embedding,
-        dtype="float32",
-    )
-
-    scores, indices = st.session_state.faiss_index.search(
-        query_embedding,
-        min(
-            top_k,
-            st.session_state.faiss_index.ntotal,
-        ),
-    )
-
-    results = []
-
-    for index, score in zip(indices[0], scores[0]):
-
-        if index < 0:
-            continue
-
-        results.append(
-            (
-                int(index),
-                float(score),
-            )
-        )
-
-    return results
+    return index
 
 
 # ============================================================
 # KEYWORD SEARCH
 # ============================================================
 
-def keyword_search(
-    query: str,
-    top_k: int = KEYWORD_TOP_K,
-) -> List[Tuple[int, float]]:
+def tokenize(text):
     """
-    Keyword search using TF-IDF cosine similarity.
+    Simple keyword tokenizer.
     """
 
-    vectorizer = st.session_state.tfidf_vectorizer
-    tfidf_matrix = st.session_state.tfidf_matrix
+    words = re.findall(r"\b[a-zA-Z0-9]+\b", text.lower())
 
-    if vectorizer is None or tfidf_matrix is None:
-        return []
+    # Remove very common words
+    stop_words = {
+        "the",
+        "is",
+        "are",
+        "a",
+        "an",
+        "and",
+        "or",
+        "of",
+        "to",
+        "in",
+        "for",
+        "on",
+        "with",
+        "what",
+        "how",
+        "when",
+        "where",
+        "which",
+        "who"
+    }
 
-    query_vector = vectorizer.transform([query])
+    return [
+        word
+        for word in words
+        if word not in stop_words and len(word) > 2
+    ]
 
-    similarities = cosine_similarity(
-        query_vector,
-        tfidf_matrix,
-    )[0]
 
-    ranked_indices = np.argsort(
-        similarities
-    )[::-1]
+def keyword_score(question, chunk_text):
+    """
+    Score a chunk based on matching question keywords.
+    """
 
-    results = []
+    question_words = set(tokenize(question))
+    chunk_words = set(tokenize(chunk_text))
 
-    for index in ranked_indices[:top_k]:
+    if not question_words:
+        return 0.0
 
-        score = float(similarities[index])
+    matches = question_words.intersection(chunk_words)
 
-        if score <= 0:
-            continue
-
-        results.append(
-            (
-                int(index),
-                score,
-            )
-        )
-
-    return results
+    return len(matches) / len(question_words)
 
 
 # ============================================================
 # HYBRID SEARCH
 # ============================================================
 
-def hybrid_search(
-    query: str,
-    top_k: int = FINAL_TOP_K,
-) -> List[Dict]:
+def hybrid_search(question, top_k=TOP_K):
     """
-    Combine semantic and keyword search.
-
-    Hybrid score:
-
-        0.65 * semantic_score
-        +
-        0.35 * keyword_score
-
-    This makes the retrieval strategy easy to explain.
+    Combine semantic FAISS search and keyword search.
     """
 
-    semantic_results = semantic_search(query)
-
-    keyword_results = keyword_search(query)
-
-    combined_scores = {}
-
-    # Add semantic scores.
-    for index, score in semantic_results:
-
-        combined_scores.setdefault(
-            index,
-            {
-                "semantic_score": 0.0,
-                "keyword_score": 0.0,
-            },
-        )
-
-        combined_scores[index]["semantic_score"] = score
-
-    # Add keyword scores.
-    for index, score in keyword_results:
-
-        combined_scores.setdefault(
-            index,
-            {
-                "semantic_score": 0.0,
-                "keyword_score": 0.0,
-            },
-        )
-
-        combined_scores[index]["keyword_score"] = score
-
-    ranked = []
-
-    for index, scores in combined_scores.items():
-
-        hybrid_score = (
-            SEMANTIC_WEIGHT * scores["semantic_score"]
-            +
-            KEYWORD_WEIGHT * scores["keyword_score"]
-        )
-
-        chunk = st.session_state.chunks[index]
-
-        ranked.append(
-            {
-                "index": index,
-                "text": chunk["text"],
-                "metadata": chunk["metadata"],
-                "semantic_score": scores["semantic_score"],
-                "keyword_score": scores["keyword_score"],
-                "hybrid_score": hybrid_score,
-            }
-        )
-
-    ranked.sort(
-        key=lambda item: item["hybrid_score"],
-        reverse=True,
-    )
-
-    return ranked[:top_k]
-
-
-# ============================================================
-# GOOGLE DRIVE HELPERS
-# ============================================================
-
-def extract_drive_id(url: str) -> Optional[str]:
-    """
-    Extract a Google Drive file/folder ID from common Drive URLs.
-    """
-
-    url = url.strip()
-
-    parsed = urlparse(url)
-
-    # /file/d/<ID>/view
-    match = re.search(
-        r"/file/d/([a-zA-Z0-9_-]+)",
-        parsed.path,
-    )
-
-    if match:
-        return match.group(1)
-
-    # /folders/<ID>
-    match = re.search(
-        r"/folders/([a-zA-Z0-9_-]+)",
-        parsed.path,
-    )
-
-    if match:
-        return match.group(1)
-
-    # ?id=<ID>
-    query = parse_qs(parsed.query)
-
-    if "id" in query and query["id"]:
-        return query["id"][0]
-
-    return None
-
-
-def is_google_drive_url(url: str) -> bool:
-    try:
-        hostname = urlparse(url).hostname or ""
-
-        return (
-            hostname == "drive.google.com"
-            or hostname.endswith(".drive.google.com")
-        )
-
-    except Exception:
-        return False
-
-
-def drive_file_download_url(file_id: str) -> str:
-    return (
-        "https://drive.google.com/uc"
-        f"?export=download&id={file_id}"
-    )
-
-
-def download_public_drive_file(
-    file_id: str,
-    filename_hint: str = "drive_file",
-) -> Tuple[str, bytes]:
-    """
-    Download a publicly accessible Drive file without OAuth.
-
-    This works for individual files that Drive allows to be downloaded
-    publicly.
-    """
-
-    url = drive_file_download_url(file_id)
-
-    response = requests.get(
-        url,
-        timeout=30,
-        allow_redirects=True,
-        headers={
-            "User-Agent": (
-                "Mozilla/5.0 "
-                "(compatible; Streamlit RAG application)"
-            )
-        },
-    )
-
-    response.raise_for_status()
-
-    content_type = (
-        response.headers.get(
-            "Content-Type",
-            ""
-        ).lower()
-    )
-
-    content = response.content
-
-    # A common failure mode is receiving an HTML login/permission page.
-    if "text/html" in content_type:
-
-        html_preview = content[:1000].lower()
-
-        if (
-            b"sign in" in html_preview
-            or b"permission" in html_preview
-            or b"access denied" in html_preview
-        ):
-            raise PermissionError(
-                "The Google Drive file is not publicly accessible."
-            )
-
-        raise ValueError(
-            "Google Drive returned an HTML page instead of a file."
-        )
-
-    if not content:
-        raise ValueError(
-            "The Google Drive file is empty."
-        )
-
-    return filename_hint, content
-
-
-def get_drive_file_metadata(
-    file_id: str,
-    api_key: str,
-) -> Dict:
-    """
-    Retrieve public file metadata through Drive API v3.
-
-    API key is sufficient for public resources; OAuth is not required
-    for public-only access.
-    """
-
-    url = (
-        f"https://www.googleapis.com/drive/v3/files/{file_id}"
-    )
-
-    params = {
-        "key": api_key,
-        "fields": (
-            "id,name,mimeType,size,"
-            "resourceKey,webContentLink"
-        ),
-    }
-
-    response = requests.get(
-        url,
-        params=params,
-        timeout=20,
-    )
-
-    if response.status_code == 404:
-        raise FileNotFoundError(
-            "Google Drive file was not found or is not publicly accessible."
-        )
-
-    if response.status_code in {401, 403}:
-        raise PermissionError(
-            "Google Drive denied access to this file."
-        )
-
-    response.raise_for_status()
-
-    return response.json()
-
-
-def list_public_drive_folder(
-    folder_id: str,
-    api_key: str,
-) -> List[Dict]:
-    """
-    List files directly inside a public Google Drive folder.
-
-    Only supported file types are returned.
-    """
-
-    url = "https://www.googleapis.com/drive/v3/files"
-
-    files = []
-
-    page_token = None
-
-    while True:
-
-        params = {
-            "key": api_key,
-            "q": (
-                f"'{folder_id}' in parents "
-                "and trashed = false"
-            ),
-            "pageSize": 100,
-            "fields": (
-                "nextPageToken,"
-                "files(id,name,mimeType,size,resourceKey)"
-            ),
-            "orderBy": "name",
-        }
-
-        if page_token:
-            params["pageToken"] = page_token
-
-        response = requests.get(
-            url,
-            params=params,
-            timeout=20,
-        )
-
-        if response.status_code in {401, 403}:
-            raise PermissionError(
-                "Google Drive denied access to this folder. "
-                "Make sure the folder is shared as "
-                "'Anyone with the link'."
-            )
-
-        if response.status_code == 404:
-            raise FileNotFoundError(
-                "Google Drive folder was not found."
-            )
-
-        response.raise_for_status()
-
-        data = response.json()
-
-        for item in data.get("files", []):
-
-            name = item.get("name", "")
-
-            if is_supported_file(name):
-                files.append(item)
-
-        page_token = data.get("nextPageToken")
-
-        if not page_token:
-            break
-
-    return files
-
-
-def load_drive_source(
-    url: str,
-) -> Tuple[List[Dict], List[str], List[str]]:
-    """
-    Load either:
-
-    - one public Drive file
-    - a public Drive folder
-
-    Returns:
-
-        documents
-        supported_file_names
-        skipped_file_names
-    """
-
-    if not is_google_drive_url(url):
-        raise ValueError(
-            "Please enter a valid Google Drive URL."
-        )
-
-    drive_id = extract_drive_id(url)
-
-    if not drive_id:
-        raise ValueError(
-            "Could not extract a Google Drive file/folder ID from the URL."
-        )
+    chunks = st.session_state.chunks
+    index = st.session_state.faiss_index
+
+    if not chunks or index is None:
+        return []
 
     # --------------------------------------------------------
-    # First try to determine whether this is a single file.
-    # This requires the optional API key.
+    # Semantic search
     # --------------------------------------------------------
 
-    api_key = get_drive_api_key()
+    question_embedding = embedding_model.encode(
+        [question],
+        convert_to_numpy=True,
+        normalize_embeddings=True
+    ).astype("float32")
 
-    documents = []
-    supported_names = []
-    skipped_names = []
-
-    if api_key:
-
-        try:
-            metadata = get_drive_file_metadata(
-                drive_id,
-                api_key,
-            )
-
-            name = metadata.get(
-                "name",
-                "drive_file",
-            )
-
-            mime_type = metadata.get(
-                "mimeType",
-                "",
-            )
-
-            # Google folder
-            if mime_type == "application/vnd.google-apps.folder":
-
-                files = list_public_drive_folder(
-                    drive_id,
-                    api_key,
-                )
-
-                for file_info in files:
-
-                    file_id = file_info["id"]
-                    filename = file_info["name"]
-
-                    try:
-                        _, content = download_public_drive_file(
-                            file_id,
-                            filename,
-                        )
-
-                        extracted = extract_document(
-                            content,
-                            filename,
-                        )
-
-                        if extracted:
-                            documents.extend(extracted)
-                            supported_names.append(filename)
-
-                    except Exception:
-                        skipped_names.append(filename)
-
-                return (
-                    documents,
-                    supported_names,
-                    skipped_names,
-                )
-
-            # Single supported file.
-            if is_supported_file(name):
-
-                _, content = download_public_drive_file(
-                    drive_id,
-                    name,
-                )
-
-                documents = extract_document(
-                    content,
-                    name,
-                )
-
-                if documents:
-                    supported_names.append(name)
-
-                return (
-                    documents,
-                    supported_names,
-                    skipped_names,
-                )
-
-            skipped_names.append(name)
-
-            return (
-                documents,
-                supported_names,
-                skipped_names,
-            )
-
-        except PermissionError:
-            raise
-
-        except Exception:
-            # If metadata lookup fails, fall through to the
-            # direct public-file download attempt.
-            pass
-
-    # --------------------------------------------------------
-    # No API key: try direct public individual-file download.
-    # --------------------------------------------------------
-
-    filename_hint = f"drive_file_{drive_id}.pdf"
-
-    try:
-
-        _, content = download_public_drive_file(
-            drive_id,
-            filename_hint,
-        )
-
-    except PermissionError:
-        raise
-
-    except Exception as exc:
-
-        if not api_key:
-            raise RuntimeError(
-                "This link appears to be a Google Drive folder, "
-                "or Drive requires API access to enumerate its files. "
-                "For folders, add GOOGLE_DRIVE_API_KEY to Streamlit "
-                "Secrets. Individual public files do not require "
-                "Google OAuth credentials."
-            ) from exc
-
-        raise RuntimeError(
-            "Unable to access this Google Drive link. "
-            "Make sure it is publicly accessible."
-        ) from exc
-
-    # Try to determine the actual file type from the response.
-    # If no extension is available, inspect common signatures.
-    if content.startswith(b"%PDF"):
-        filename = filename_hint.replace(
-            ".pdf",
-            ".pdf",
-        )
-
-    elif content[:2] == b"PK":
-        # DOCX is a ZIP container.
-        filename = filename_hint.replace(
-            ".pdf",
-            ".docx",
-        )
-
-    else:
-        filename = filename_hint.replace(
-            ".pdf",
-            ".txt",
-        )
-
-    extracted = extract_document(
-        content,
-        filename,
+    semantic_scores, semantic_indices = index.search(
+        question_embedding,
+        min(top_k * 2, len(chunks))
     )
 
-    if extracted:
-        supported_names.append(filename)
-        documents.extend(extracted)
+    semantic_scores = semantic_scores[0]
+    semantic_indices = semantic_indices[0]
 
-    return (
-        documents,
-        supported_names,
-        skipped_names,
-    )
+    semantic_results = {}
 
-
-# ============================================================
-# DOCUMENT PROCESSING
-# ============================================================
-
-def create_document_signature(
-    documents: List[Dict],
-) -> str:
-    """
-    Create a stable hash so identical content is not unnecessarily
-    re-indexed.
-    """
-
-    digest = hashlib.sha256()
-
-    for document in documents:
-
-        text = document["text"]
-        metadata = document["metadata"]
-
-        digest.update(
-            text.encode(
-                "utf-8",
-                errors="ignore",
-            )
-        )
-
-        digest.update(
-            str(metadata).encode(
-                "utf-8",
-                errors="ignore",
-            )
-        )
-
-    return digest.hexdigest()
-
-
-def process_documents(
-    documents: List[Dict],
-    source_name: str,
-):
-    """
-    Complete indexing pipeline:
-
-    extraction -> chunking -> embeddings -> FAISS -> TF-IDF
-    """
-
-    if not documents:
-        raise ValueError(
-            "No readable document content was found."
-        )
-
-    chunks = chunk_documents(documents)
-
-    if not chunks:
-        raise ValueError(
-            "Document extraction succeeded, but no chunks were created."
-        )
-
-    signature = create_document_signature(
-        documents
-    )
-
-    # Avoid rebuilding the exact same index.
-    if (
-        st.session_state.processed_hash == signature
-        and st.session_state.faiss_index is not None
+    for score, index_number in zip(
+        semantic_scores,
+        semantic_indices
     ):
-        return False
 
-    (
-        embeddings,
-        faiss_index,
-        vectorizer,
-        tfidf_matrix,
-    ) = build_search_index(chunks)
+        semantic_results[int(index_number)] = float(score)
 
-    st.session_state.documents = documents
-    st.session_state.chunks = chunks
-    st.session_state.embeddings = embeddings
-    st.session_state.faiss_index = faiss_index
-    st.session_state.tfidf_vectorizer = vectorizer
-    st.session_state.tfidf_matrix = tfidf_matrix
-    st.session_state.processed_hash = signature
-    st.session_state.processed_source = source_name
+    # --------------------------------------------------------
+    # Keyword search
+    # --------------------------------------------------------
 
-    return True
+    results = []
+
+    for index_number, chunk in enumerate(chunks):
+
+        semantic_score = semantic_results.get(
+            index_number,
+            0.0
+        )
+
+        keyword = keyword_score(
+            question,
+            chunk["text"]
+        )
+
+        # Hybrid score
+        hybrid_score = (
+            0.75 * semantic_score +
+            0.25 * keyword
+        )
+
+        results.append({
+            "text": chunk["text"],
+            "filename": chunk["filename"],
+            "page": chunk["page"],
+            "semantic_score": semantic_score,
+            "keyword_score": keyword,
+            "hybrid_score": hybrid_score
+        })
+
+    # Highest score first
+    results.sort(
+        key=lambda x: x["hybrid_score"],
+        reverse=True
+    )
+
+    return results[:top_k]
 
 
 # ============================================================
-# GROQ ANSWER GENERATION
+# GROQ
 # ============================================================
 
-def generate_answer(
-    question: str,
-    retrieved_chunks: List[Dict],
-) -> str:
+def get_groq_client():
     """
-    Send only retrieved document context to Groq.
+    Read GROQ_API_KEY from Streamlit secrets.
     """
 
-    api_key = get_groq_api_key()
+    api_key = st.secrets.get("GROQ_API_KEY")
 
     if not api_key:
-        raise RuntimeError(
-            "GROQ_API_KEY is not configured. "
-            "Add it to Streamlit Secrets or your environment variables."
-        )
+        return None
 
-    if not retrieved_chunks:
+    return Groq(api_key=api_key)
+
+
+def generate_answer(question, retrieved_chunks):
+    """
+    Ask Groq to answer only from retrieved context.
+    """
+
+    client = get_groq_client()
+
+    if client is None:
         return (
-            "I could not find this information in the uploaded documents."
+            "GROQ_API_KEY is not configured. "
+            "Add it to Streamlit secrets."
         )
 
     context_parts = []
 
-    for number, item in enumerate(
-        retrieved_chunks,
-        start=1,
-    ):
+    for i, chunk in enumerate(retrieved_chunks, start=1):
 
-        metadata = item["metadata"]
+        page_text = ""
 
-        filename = metadata.get(
-            "filename",
-            "Unknown",
-        )
-
-        page = metadata.get(
-            "page"
-        )
-
-        location = filename
-
-        if page:
-            location += f", page {page}"
+        if chunk["page"] is not None:
+            page_text = f", Page {chunk['page']}"
 
         context_parts.append(
-            f"[Source {number}: {location}]\n"
-            f"{item['text']}"
+            f"""
+SOURCE {i}
+Filename: {chunk['filename']}{page_text}
+
+Content:
+{chunk['text']}
+"""
         )
 
-    context = "\n\n".join(context_parts)
+    context = "\n".join(context_parts)
 
     system_prompt = """
-You are a document question-answering assistant.
+You are an AI document assistant.
 
-Answer the user's question ONLY using the supplied document context.
+Answer the user's question ONLY using the provided document context.
 
 Rules:
-
 1. Do not use outside knowledge.
-2. Do not invent facts.
-3. If the answer cannot be found in the provided context,
-   clearly say that the answer was not found in the uploaded documents.
-4. Prefer precise answers.
-5. When useful, mention the source document or page.
-6. Do not claim that information exists in the documents unless
-   it is actually present in the supplied context.
+2. Do not invent information.
+3. If the answer is not available in the context, clearly say:
+   "The information is not available in the provided documents."
+4. Keep the answer clear and concise.
 """
 
     user_prompt = f"""
@@ -1353,734 +486,419 @@ DOCUMENT CONTEXT:
 USER QUESTION:
 
 {question}
-
-Answer using ONLY the document context above.
 """
 
-    client = Groq(
-        api_key=api_key
-    )
-
-    completion = client.chat.completions.create(
-        model=get_groq_model(),
+    response = client.chat.completions.create(
+        model=GROQ_MODEL,
         messages=[
             {
                 "role": "system",
-                "content": system_prompt.strip(),
+                "content": system_prompt
             },
             {
                 "role": "user",
-                "content": user_prompt.strip(),
-            },
+                "content": user_prompt
+            }
         ],
-        temperature=0.1,
+        temperature=0,
+        max_tokens=700
     )
 
-    return completion.choices[0].message.content.strip()
+    return response.choices[0].message.content
 
 
 # ============================================================
-# UI HELPERS
+# PROCESS DOCUMENTS
 # ============================================================
 
-def render_source(
-    source: Dict,
-    number: int,
-):
-    metadata = source["metadata"]
-
-    filename = metadata.get(
-        "filename",
-        "Unknown file",
-    )
-
-    page = metadata.get(
-        "page"
-    )
-
-    file_type = metadata.get(
-        "file_type",
-        "",
-    )
-
-    if page:
-        location = f"Page {page}"
-    else:
-        location = "Page not available"
-
-    st.markdown(
-        f"""
-        <div class="source-card">
-            <div class="source-title">
-                {number}. {filename}
-            </div>
-            <div class="source-meta">
-                {file_type.upper()} · {location}
-            </div>
-            <div class="source-text">
-                {source["text"]}
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def clear_index():
-    st.session_state.documents = []
-    st.session_state.chunks = []
-    st.session_state.embeddings = None
-    st.session_state.faiss_index = None
-    st.session_state.tfidf_vectorizer = None
-    st.session_state.tfidf_matrix = None
-    st.session_state.processed_hash = None
-    st.session_state.processed_source = None
-    st.session_state.drive_files = []
-
-
-# ============================================================
-# HEADER
-# ============================================================
-
-st.markdown(
+def process_documents(documents):
     """
-    <div class="app-header">
-        <h1>📚 AI Document Assistant</h1>
-        <p>
-            A hybrid RAG chatbot for asking questions across your
-            PDF, DOCX, TXT, Markdown, and public Google Drive documents.
-        </p>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+    Complete processing pipeline:
+
+    extraction
+        ↓
+    chunking
+        ↓
+    embeddings
+        ↓
+    FAISS
+    """
+
+    chunks = chunk_text(documents)
+
+    if not chunks:
+        return False
+
+    with st.spinner("Creating document embeddings..."):
+
+        embeddings = create_embeddings(chunks)
+
+        index = create_faiss_index(embeddings)
+
+    st.session_state.documents = documents
+    st.session_state.chunks = chunks
+    st.session_state.embeddings = embeddings
+    st.session_state.faiss_index = index
+    st.session_state.processed = True
+
+    return True
+
+
+# ============================================================
+# GOOGLE DRIVE
+# ============================================================
+
+def load_from_google_drive(url):
+    """
+    Download a public Google Drive file or folder.
+
+    gdown handles Drive share links.
+    """
+
+    temp_directory = tempfile.mkdtemp()
+
+    try:
+
+        # Detect folder URL
+        if "/folders/" in url:
+
+            downloaded = gdown.download_folder(
+                url=url,
+                output=temp_directory,
+                quiet=True
+            )
+
+            if not downloaded:
+                return []
+
+            file_paths = []
+
+            for path in downloaded:
+
+                path = Path(path)
+
+                if path.suffix.lower() in {
+                    ".pdf",
+                    ".docx",
+                    ".txt",
+                    ".md"
+                }:
+                    file_paths.append(path)
+
+        else:
+
+            downloaded_path = gdown.download(
+                url=url,
+                output=temp_directory,
+                quiet=True
+            )
+
+            if not downloaded_path:
+                return []
+
+            downloaded_path = Path(downloaded_path)
+
+            if downloaded_path.is_dir():
+
+                file_paths = [
+                    path
+                    for path in downloaded_path.rglob("*")
+                    if path.suffix.lower() in {
+                        ".pdf",
+                        ".docx",
+                        ".txt",
+                        ".md"
+                    }
+                ]
+
+            else:
+
+                file_paths = [downloaded_path]
+
+        documents = []
+
+        for file_path in file_paths:
+
+            if file_path.suffix.lower() not in {
+                ".pdf",
+                ".docx",
+                ".txt",
+                ".md"
+            }:
+                continue
+
+            filename = file_path.name
+
+            extracted = extract_document(
+                str(file_path),
+                filename
+            )
+
+            documents.extend(extracted)
+
+        return documents
+
+    except Exception as e:
+
+        st.error(
+            f"Could not load Google Drive content: {e}"
+        )
+
+        return []
 
 
 # ============================================================
 # SIDEBAR
 # ============================================================
 
-with st.sidebar:
+st.sidebar.header("📄 Document Sources")
 
-    st.markdown("### ⚙️ Knowledge Base")
 
-    source_mode = st.radio(
-        "Choose document source",
-        [
-            "Local Files",
-            "Google Drive",
-        ],
-    )
+uploaded_files = st.sidebar.file_uploader(
+    "Upload documents",
+    type=["pdf", "docx", "txt", "md"],
+    accept_multiple_files=True
+)
 
-    st.divider()
 
-    st.markdown("### 🔎 Retrieval")
+st.sidebar.markdown("---")
 
-    st.caption(
-        "Hybrid retrieval combines semantic vector similarity "
-        "with TF-IDF keyword matching."
-    )
+st.sidebar.subheader("Google Drive")
 
-    st.write(
-        f"Semantic weight: **{SEMANTIC_WEIGHT:.0%}**"
-    )
+drive_url = st.sidebar.text_input(
+    "Paste a public Drive file or folder link"
+)
 
-    st.write(
-        f"Keyword weight: **{KEYWORD_WEIGHT:.0%}**"
-    )
 
-    st.divider()
-
-    if st.session_state.faiss_index is not None:
-
-        st.success(
-            f"Indexed {len(st.session_state.chunks)} chunks"
-        )
-
-        if st.session_state.processed_source:
-            st.caption(
-                f"Source: {st.session_state.processed_source}"
-            )
-
-    else:
-
-        st.info(
-            "No documents indexed yet."
-        )
-
-    if st.button(
-        "Clear Knowledge Base",
-        use_container_width=True,
-    ):
-
-        clear_index()
-
-        st.success(
-            "Knowledge base cleared."
-        )
-
-        st.rerun()
+process_button = st.sidebar.button(
+    "Process Documents",
+    use_container_width=True
+)
 
 
 # ============================================================
-# DOCUMENT SOURCE UI
+# PROCESS BUTTON
 # ============================================================
 
-if source_mode == "Local Files":
+if process_button:
 
-    st.markdown("## 📁 Upload Documents")
+    all_documents = []
 
-    st.markdown(
-        """
-        <div class="info-card">
-            Upload one or more supported documents. The documents
-            remain in your current Streamlit session and are indexed
-            only when you click <b>Process Documents</b>.
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    uploaded_files = st.file_uploader(
-        "Choose documents",
-        type=[
-            "pdf",
-            "docx",
-            "txt",
-            "md",
-            "markdown",
-        ],
-        accept_multiple_files=True,
-        help=(
-            "Supported formats: PDF, DOCX, TXT and Markdown."
-        ),
-    )
+    # --------------------------------------------------------
+    # LOCAL UPLOADS
+    # --------------------------------------------------------
 
     if uploaded_files:
 
-        col1, col2 = st.columns(2)
+        for uploaded_file in uploaded_files:
 
-        with col1:
-            st.markdown(
-                f"""
-                <div class="metric-card">
-                    <div class="metric-number">
-                        {len(uploaded_files)}
-                    </div>
-                    <div class="metric-label">
-                        Files selected
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+            file_suffix = Path(
+                uploaded_file.name
+            ).suffix.lower()
 
-        with col2:
+            with tempfile.NamedTemporaryFile(
+                delete=False,
+                suffix=file_suffix
+            ) as temp_file:
 
-            supported_count = sum(
-                is_supported_file(
-                    file.name
+                temp_file.write(
+                    uploaded_file.getbuffer()
                 )
-                for file in uploaded_files
+
+                temp_path = temp_file.name
+
+            extracted = extract_document(
+                temp_path,
+                uploaded_file.name
             )
 
-            st.markdown(
-                f"""
-                <div class="metric-card">
-                    <div class="metric-number">
-                        {supported_count}
-                    </div>
-                    <div class="metric-label">
-                        Supported files
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+            all_documents.extend(extracted)
 
-        st.write("")
+    # --------------------------------------------------------
+    # GOOGLE DRIVE
+    # --------------------------------------------------------
 
-        for file in uploaded_files:
-            st.caption(
-                f"📄 {file.name}"
-            )
+    if drive_url.strip():
 
-        if st.button(
-            "🚀 Process Documents",
-            type="primary",
-            use_container_width=True,
+        with st.spinner(
+            "Loading documents from Google Drive..."
         ):
 
-            documents = []
-
-            progress = st.progress(
-                0,
-                text="Reading documents...",
+            drive_documents = load_from_google_drive(
+                drive_url.strip()
             )
 
-            try:
+            all_documents.extend(
+                drive_documents
+            )
 
-                for index, uploaded_file in enumerate(
-                    uploaded_files
-                ):
+    # --------------------------------------------------------
+    # PROCESS EVERYTHING
+    # --------------------------------------------------------
 
-                    if not is_supported_file(
-                        uploaded_file.name
-                    ):
-                        st.warning(
-                            f"Unsupported file skipped: "
-                            f"{uploaded_file.name}"
-                        )
-                        continue
+    if all_documents:
 
-                    file_bytes = uploaded_file.getvalue()
+        success = process_documents(
+            all_documents
+        )
 
-                    extracted = extract_document(
-                        file_bytes,
-                        uploaded_file.name,
-                    )
+        if success:
 
-                    if not extracted:
-                        st.warning(
-                            f"No readable text found in "
-                            f"{uploaded_file.name}"
-                        )
-                    else:
-                        documents.extend(
-                            extracted
-                        )
+            st.sidebar.success(
+                "Documents processed successfully."
+            )
 
-                    progress.progress(
-                        (index + 1)
-                        / len(uploaded_files),
-                        text=(
-                            f"Processed "
-                            f"{uploaded_file.name}"
-                        ),
-                    )
+    else:
 
-                if not documents:
-                    st.error(
-                        "No readable documents were found."
-                    )
-
-                else:
-
-                    with st.spinner(
-                        "Creating chunks, embeddings and search indexes..."
-                    ):
-
-                        rebuilt = process_documents(
-                            documents,
-                            "Local Files",
-                        )
-
-                    if rebuilt:
-                        st.success(
-                            f"Successfully indexed "
-                            f"{len(documents)} document sections "
-                            f"and {len(st.session_state.chunks)} chunks."
-                        )
-                    else:
-                        st.info(
-                            "These documents are already indexed."
-                        )
-
-            except Exception as exc:
-
-                st.error(
-                    f"Document processing failed: {exc}"
-                )
-
-            finally:
-                progress.empty()
+        st.sidebar.warning(
+            "No supported documents found."
+        )
 
 
-else:
+# ============================================================
+# DOCUMENT INFORMATION
+# ============================================================
 
-    # ========================================================
-    # GOOGLE DRIVE
-    # ========================================================
+if st.session_state.documents:
 
-    st.markdown("## ☁️ Google Drive")
+    st.subheader("📋 Extracted Document Information")
 
-    st.markdown(
-        """
-        <div class="info-card">
-            Paste a public Google Drive file or folder link.
-            Individual public files can be downloaded without
-            Google OAuth. Public folder indexing uses the Google
-            Drive API when <code>GOOGLE_DRIVE_API_KEY</code> is
-            configured.
-        </div>
-        """,
-        unsafe_allow_html=True,
+    unique_documents = {}
+
+    for document in st.session_state.documents:
+
+        filename = document["filename"]
+
+        if filename not in unique_documents:
+            unique_documents[filename] = {
+                "pages": set(),
+                "characters": 0
+            }
+
+        page = document["page"]
+
+        if page is not None:
+            unique_documents[filename]["pages"].add(
+                page
+            )
+
+        unique_documents[filename]["characters"] += len(
+            document["text"]
+        )
+
+    for filename, information in unique_documents.items():
+
+        pages = information["pages"]
+
+        if pages:
+            page_info = f"{len(pages)} page(s)"
+        else:
+            page_info = "Page information unavailable"
+
+        st.write(
+            f"**{filename}** — "
+            f"{page_info} — "
+            f"{information['characters']:,} characters"
+        )
+
+    st.info(
+        f"Created **{len(st.session_state.chunks)} chunks** "
+        f"from the loaded documents."
     )
 
-    drive_url = st.text_input(
-        "Google Drive file or folder URL",
-        placeholder=(
-            "https://drive.google.com/file/d/... "
-            "or https://drive.google.com/drive/folders/..."
-        ),
-    )
 
-    drive_api_key_configured = bool(
-        get_drive_api_key()
-    )
+# ============================================================
+# QUESTION ANSWERING
+# ============================================================
 
-    if drive_api_key_configured:
+st.subheader("💬 Ask a Question")
 
-        st.caption(
-            "✓ Google Drive API access is configured."
+question = st.text_input(
+    "Enter your question",
+    placeholder="What does the document say about annual leave?"
+)
+
+
+if st.button("Ask"):
+
+    if not st.session_state.processed:
+
+        st.warning(
+            "Please upload or load documents and "
+            "click 'Process Documents' first."
+        )
+
+    elif not question.strip():
+
+        st.warning(
+            "Please enter a question."
         )
 
     else:
 
-        st.caption(
-            "No GOOGLE_DRIVE_API_KEY configured. "
-            "Public individual files can still be attempted. "
-            "Folder links require the optional Drive API key."
-        )
+        with st.spinner("Searching documents..."):
 
-    if st.button(
-        "☁️ Load from Drive",
-        type="primary",
-        use_container_width=True,
-    ):
+            retrieved_chunks = hybrid_search(
+                question,
+                top_k=TOP_K
+            )
 
-        if not drive_url.strip():
+        if not retrieved_chunks:
 
             st.warning(
-                "Please paste a Google Drive link first."
+                "No relevant information was found."
             )
 
         else:
 
-            with st.spinner(
-                "Accessing Google Drive..."
-            ):
+            with st.spinner("Generating answer..."):
 
-                try:
-
-                    (
-                        drive_documents,
-                        supported_files,
-                        skipped_files,
-                    ) = load_drive_source(
-                        drive_url
-                    )
-
-                    if supported_files:
-
-                        st.success(
-                            f"Found {len(supported_files)} "
-                            f"supported file(s)."
-                        )
-
-                        for filename in supported_files:
-                            st.caption(
-                                f"✓ {filename}"
-                            )
-
-                    if skipped_files:
-
-                        st.warning(
-                            "Some files were skipped because "
-                            "they are unsupported or could not "
-                            "be downloaded."
-                        )
-
-                        for filename in skipped_files:
-                            st.caption(
-                                f"Skipped: {filename}"
-                            )
-
-                    if not drive_documents:
-
-                        st.error(
-                            "No supported readable documents "
-                            "were found at this Drive link."
-                        )
-
-                    else:
-
-                        with st.spinner(
-                            "Creating chunks, embeddings and search indexes..."
-                        ):
-
-                            rebuilt = process_documents(
-                                drive_documents,
-                                "Google Drive",
-                            )
-
-                        if rebuilt:
-
-                            st.success(
-                                f"Successfully indexed "
-                                f"{len(drive_documents)} document sections "
-                                f"into "
-                                f"{len(st.session_state.chunks)} chunks."
-                            )
-
-                        else:
-
-                            st.info(
-                                "These Drive documents are already indexed."
-                            )
-
-                except PermissionError as exc:
-
-                    st.error(
-                        f"Google Drive access denied: {exc}"
-                    )
-
-                except requests.RequestException as exc:
-
-                    st.error(
-                        "Could not connect to Google Drive. "
-                        f"Network error: {exc}"
-                    )
-
-                except Exception as exc:
-
-                    st.error(
-                        f"Could not load the Google Drive content: {exc}"
-                    )
-
-
-# ============================================================
-# KNOWLEDGE BASE STATUS
-# ============================================================
-
-if st.session_state.faiss_index is not None:
-
-    st.divider()
-
-    st.markdown("## 📊 Knowledge Base")
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        st.markdown(
-            f"""
-            <div class="metric-card">
-                <div class="metric-number">
-                    {len(st.session_state.documents)}
-                </div>
-                <div class="metric-label">
-                    Document sections
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    with col2:
-        st.markdown(
-            f"""
-            <div class="metric-card">
-                <div class="metric-number">
-                    {len(st.session_state.chunks)}
-                </div>
-                <div class="metric-label">
-                    Indexed chunks
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    with col3:
-        st.markdown(
-            """
-            <div class="metric-card">
-                <div class="metric-number">
-                    Hybrid
-                </div>
-                <div class="metric-label">
-                    Retrieval method
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-
-# ============================================================
-# CHAT INTERFACE
-# ============================================================
-
-st.divider()
-
-st.markdown("## 💬 Ask Your Documents")
-
-if st.session_state.faiss_index is None:
-
-    st.info(
-        "Upload local documents or load a public Google Drive "
-        "file/folder before asking questions."
-    )
-
-else:
-
-    # Render previous messages.
-    for message in st.session_state.chat_history:
-
-        with st.chat_message(
-            message["role"]
-        ):
-
-            st.markdown(
-                message["content"]
-            )
-
-            if (
-                message["role"] == "assistant"
-                and message.get("sources")
-            ):
-
-                with st.expander(
-                    "📚 Retrieved Sources"
-                ):
-
-                    for number, source in enumerate(
-                        message["sources"],
-                        start=1,
-                    ):
-
-                        render_source(
-                            source,
-                            number,
-                        )
-
-    question = st.chat_input(
-        "Ask a question about your documents..."
-    )
-
-    if question:
-
-        question = question.strip()
-
-        if not question:
-
-            st.warning(
-                "Please enter a question."
-            )
-
-        else:
-
-            # Show user question.
-            st.session_state.chat_history.append(
-                {
-                    "role": "user",
-                    "content": question,
-                }
-            )
-
-            with st.chat_message(
-                "user"
-            ):
-
-                st.markdown(
-                    question
+                answer = generate_answer(
+                    question,
+                    retrieved_chunks
                 )
 
-            # Retrieve documents.
-            with st.chat_message(
-                "assistant"
+            # ------------------------------------------------
+            # ANSWER
+            # ------------------------------------------------
+
+            st.subheader("🤖 Answer")
+
+            st.write(answer)
+
+            # ------------------------------------------------
+            # SOURCES
+            # ------------------------------------------------
+
+            st.subheader("📚 Retrieved Sources")
+
+            for i, source in enumerate(
+                retrieved_chunks,
+                start=1
             ):
 
-                with st.spinner(
-                    "Searching your documents..."
+                page_text = ""
+
+                if source["page"] is not None:
+                    page_text = (
+                        f" | Page {source['page']}"
+                    )
+
+                with st.expander(
+                    f"Source {i}: "
+                    f"{source['filename']}"
+                    f"{page_text}"
                 ):
 
-                    try:
-
-                        retrieved = hybrid_search(
-                            question,
-                            FINAL_TOP_K,
-                        )
-
-                    except Exception as exc:
-
-                        st.error(
-                            f"Search failed: {exc}"
-                        )
-
-                        retrieved = []
-
-                if not retrieved:
-
-                    answer = (
-                        "I could not find this information "
-                        "in the uploaded documents."
+                    st.write(
+                        source["text"]
                     )
 
-                    st.markdown(
-                        answer
+                    st.caption(
+                        f"Semantic score: "
+                        f"{source['semantic_score']:.3f} | "
+                        f"Keyword score: "
+                        f"{source['keyword_score']:.3f} | "
+                        f"Hybrid score: "
+                        f"{source['hybrid_score']:.3f}"
                     )
-
-                    st.session_state.chat_history.append(
-                        {
-                            "role": "assistant",
-                            "content": answer,
-                            "sources": [],
-                        }
-                    )
-
-                else:
-
-                    try:
-
-                        with st.spinner(
-                            "Generating answer..."
-                        ):
-
-                            answer = generate_answer(
-                                question,
-                                retrieved,
-                            )
-
-                        st.markdown(
-                            answer
-                        )
-
-                        with st.expander(
-                            "📚 Retrieved Sources"
-                        ):
-
-                            for number, source in enumerate(
-                                retrieved,
-                                start=1,
-                            ):
-
-                                render_source(
-                                    source,
-                                    number,
-                                )
-
-                        st.session_state.chat_history.append(
-                            {
-                                "role": "assistant",
-                                "content": answer,
-                                "sources": retrieved,
-                            }
-                        )
-
-                    except Exception as exc:
-
-                        st.error(
-                            f"Could not generate the answer: {exc}"
-                        )
-
-                        st.session_state.chat_history.append(
-                            {
-                                "role": "assistant",
-                                "content": (
-                                    "I couldn't generate an answer "
-                                    "because the LLM request failed."
-                                ),
-                                "sources": retrieved,
-                            }
-                        )
