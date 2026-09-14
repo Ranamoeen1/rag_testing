@@ -23,8 +23,7 @@ CHUNK_OVERLAP = 150
 TOP_K = 5
 
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-GROQ_MODEL = "llama-3.1-8b-instant"
-
+GROQ_MODEL = "openai/gpt-oss-20b"
 
 # ============================================================
 # PAGE CONFIG
