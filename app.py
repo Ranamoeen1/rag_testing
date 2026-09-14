@@ -1,6 +1,6 @@
+import html
 import os
 import re
-import html
 import tempfile
 from pathlib import Path
 
@@ -10,23 +10,36 @@ import numpy as np
 import streamlit as st
 
 from docx import Document
+from groq import Groq
+from groq import APIConnectionError, APIStatusError, AuthenticationError
 from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
-from groq import Groq
 
 
 # ============================================================
 # CONFIGURATION
 # ============================================================
 
+APP_TITLE = "AI Document Assistant"
+
 CHUNK_SIZE = 800
 CHUNK_OVERLAP = 150
+
 TOP_K = 5
 
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
-# Groq model
+# Current production Groq model.
+# openai/gpt-oss-20b is currently supported by Groq.
 GROQ_MODEL = "openai/gpt-oss-20b"
+
+
+SUPPORTED_EXTENSIONS = {
+    ".pdf",
+    ".docx",
+    ".txt",
+    ".md",
+}
 
 
 # ============================================================
@@ -34,10 +47,10 @@ GROQ_MODEL = "openai/gpt-oss-20b"
 # ============================================================
 
 st.set_page_config(
-    page_title="AI Document Assistant",
+    page_title=APP_TITLE,
     page_icon="📚",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
 
@@ -48,9 +61,6 @@ st.set_page_config(
 st.markdown(
     """
 <style>
-/* ==========================================================
-   GLOBAL
-   ========================================================== */
 
 .stApp {
     background: #f6f8fb;
@@ -58,14 +68,13 @@ st.markdown(
 
 .main .block-container {
     max-width: 1180px;
-    padding-top: 35px;
+    padding-top: 32px;
     padding-bottom: 60px;
 }
 
-
-/* ==========================================================
+/* ----------------------------------------------------------
    HEADER
-   ========================================================== */
+   ---------------------------------------------------------- */
 
 .app-header {
     background: #ffffff;
@@ -76,25 +85,23 @@ st.markdown(
     box-shadow: 0 4px 20px rgba(15, 23, 42, 0.04);
 }
 
-.app-header-title {
+.app-title {
+    color: #172033;
     font-size: 31px;
     font-weight: 750;
-    color: #172033;
     line-height: 1.2;
-    margin: 0;
 }
 
-.app-header-subtitle {
+.app-subtitle {
     color: #6b7280;
     font-size: 15px;
     line-height: 1.6;
     margin-top: 9px;
 }
 
-
-/* ==========================================================
-   SECTION
-   ========================================================== */
+/* ----------------------------------------------------------
+   SECTIONS
+   ---------------------------------------------------------- */
 
 .section {
     background: #ffffff;
@@ -119,10 +126,9 @@ st.markdown(
     margin-bottom: 18px;
 }
 
-
-/* ==========================================================
+/* ----------------------------------------------------------
    METRICS
-   ========================================================== */
+   ---------------------------------------------------------- */
 
 .metric-card {
     background: #f9fafc;
@@ -130,7 +136,7 @@ st.markdown(
     border-radius: 13px;
     padding: 18px 12px;
     text-align: center;
-    min-height: 92px;
+    min-height: 90px;
 }
 
 .metric-value {
@@ -145,10 +151,9 @@ st.markdown(
     margin-top: 4px;
 }
 
-
-/* ==========================================================
+/* ----------------------------------------------------------
    DOCUMENTS
-   ========================================================== */
+   ---------------------------------------------------------- */
 
 .document-card {
     background: #fafbfc;
@@ -170,10 +175,9 @@ st.markdown(
     margin-top: 4px;
 }
 
-
-/* ==========================================================
+/* ----------------------------------------------------------
    CHAT
-   ========================================================== */
+   ---------------------------------------------------------- */
 
 .user-message {
     background: #eef4ff;
@@ -220,10 +224,9 @@ st.markdown(
     line-height: 1.75;
 }
 
-
-/* ==========================================================
+/* ----------------------------------------------------------
    SOURCES
-   ========================================================== */
+   ---------------------------------------------------------- */
 
 .sources-title {
     color: #172033;
@@ -263,12 +266,12 @@ st.markdown(
     font-size: 13px;
     line-height: 1.7;
     margin-top: 12px;
+    white-space: pre-wrap;
 }
 
-
-/* ==========================================================
+/* ----------------------------------------------------------
    SIDEBAR
-   ========================================================== */
+   ---------------------------------------------------------- */
 
 section[data-testid="stSidebar"] {
     background: #ffffff;
@@ -276,7 +279,7 @@ section[data-testid="stSidebar"] {
 }
 
 section[data-testid="stSidebar"] .block-container {
-    padding-top: 30px;
+    padding-top: 28px;
 }
 
 .sidebar-title {
@@ -301,10 +304,9 @@ section[data-testid="stSidebar"] .block-container {
     margin-bottom: 8px;
 }
 
-
-/* ==========================================================
+/* ----------------------------------------------------------
    UPLOADER
-   ========================================================== */
+   ---------------------------------------------------------- */
 
 [data-testid="stFileUploader"] {
     background: #fafbfc;
@@ -313,10 +315,9 @@ section[data-testid="stSidebar"] .block-container {
     padding: 7px;
 }
 
-
-/* ==========================================================
-   INPUTS
-   ========================================================== */
+/* ----------------------------------------------------------
+   TEXT INPUT
+   ---------------------------------------------------------- */
 
 .stTextInput input {
     background: #ffffff;
@@ -331,10 +332,9 @@ section[data-testid="stSidebar"] .block-container {
     box-shadow: 0 0 0 1px #8996a9;
 }
 
-
-/* ==========================================================
+/* ----------------------------------------------------------
    BUTTONS
-   ========================================================== */
+   ---------------------------------------------------------- */
 
 .stButton > button {
     border-radius: 10px;
@@ -347,10 +347,9 @@ section[data-testid="stSidebar"] .block-container {
     border-color: #9aa6b7;
 }
 
-
-/* ==========================================================
+/* ----------------------------------------------------------
    EXPANDERS
-   ========================================================== */
+   ---------------------------------------------------------- */
 
 [data-testid="stExpander"] {
     background: #ffffff;
@@ -359,26 +358,9 @@ section[data-testid="stSidebar"] .block-container {
     margin-bottom: 8px;
 }
 
-
-/* ==========================================================
-   STATUS
-   ========================================================== */
-
-.status-success {
-    display: inline-block;
-    background: #edf8f1;
-    border: 1px solid #d4eedc;
-    color: #287344;
-    border-radius: 20px;
-    padding: 5px 11px;
-    font-size: 12px;
-    font-weight: 650;
-}
-
-
-/* ==========================================================
-   HIDE UNNECESSARY ELEMENTS
-   ========================================================== */
+/* ----------------------------------------------------------
+   FOOTER / STREAMLIT CHROME
+   ---------------------------------------------------------- */
 
 #MainMenu {
     visibility: hidden;
@@ -390,25 +372,23 @@ footer {
 
 </style>
 """,
-    unsafe_allow_html=True
+    unsafe_allow_html=True,
 )
 
 
 # ============================================================
-# HERO HEADER
+# HEADER
 # ============================================================
 
 st.markdown(
     '<div class="app-header">'
-    '<div class="app-header-title">'
-    '📚 AI Document Assistant'
-    '</div>'
-    '<div class="app-header-subtitle">'
-    'Upload your documents, build a searchable knowledge base, '
+    '<div class="app-title">📚 AI Document Assistant</div>'
+    '<div class="app-subtitle">'
+    'Upload documents, build a searchable knowledge base, '
     'and ask questions using AI-powered document retrieval.'
     '</div>'
     '</div>',
-    unsafe_allow_html=True
+    unsafe_allow_html=True,
 )
 
 
@@ -416,60 +396,94 @@ st.markdown(
 # SESSION STATE
 # ============================================================
 
-if "documents" not in st.session_state:
-    st.session_state.documents = []
+DEFAULT_SESSION_STATE = {
+    "documents": [],
+    "chunks": [],
+    "embeddings": None,
+    "faiss_index": None,
+    "processed": False,
+    "processed_signature": None,
+}
 
-if "chunks" not in st.session_state:
-    st.session_state.chunks = []
 
-if "embeddings" not in st.session_state:
-    st.session_state.embeddings = None
+for key, default_value in DEFAULT_SESSION_STATE.items():
 
-if "faiss_index" not in st.session_state:
-    st.session_state.faiss_index = None
+    if key not in st.session_state:
 
-if "processed" not in st.session_state:
-    st.session_state.processed = False
+        st.session_state[key] = default_value
 
 
 # ============================================================
 # EMBEDDING MODEL
 # ============================================================
 
-@st.cache_resource
+@st.cache_resource(show_spinner="Loading embedding model...")
 def load_embedding_model():
-    return SentenceTransformer(EMBEDDING_MODEL)
+
+    return SentenceTransformer(
+        EMBEDDING_MODEL
+    )
 
 
-embedding_model = load_embedding_model()
+try:
+
+    embedding_model = load_embedding_model()
+
+except Exception as error:
+
+    st.error(
+        "The embedding model could not be loaded."
+    )
+
+    st.caption(
+        f"Technical details: {error}"
+    )
+
+    st.stop()
 
 
 # ============================================================
 # PDF EXTRACTION
 # ============================================================
 
-def extract_pdf(file_path, filename):
+def extract_pdf(
+    file_path,
+    filename,
+):
 
     documents = []
 
-    reader = PdfReader(file_path)
+    try:
 
-    for page_number, page in enumerate(
-        reader.pages,
-        start=1
-    ):
+        reader = PdfReader(
+            file_path
+        )
 
-        text = page.extract_text() or ""
+        for page_number, page in enumerate(
+            reader.pages,
+            start=1,
+        ):
 
-        if text.strip():
+            text = page.extract_text() or ""
+
+            text = text.strip()
+
+            if not text:
+                continue
 
             documents.append(
                 {
                     "text": text,
                     "filename": filename,
-                    "page": page_number
+                    "page": page_number,
                 }
             )
+
+    except Exception as error:
+
+        raise ValueError(
+            f"Could not extract PDF '{filename}': {error}"
+        )
 
     return documents
 
@@ -478,139 +492,199 @@ def extract_pdf(file_path, filename):
 # DOCX EXTRACTION
 # ============================================================
 
-def extract_docx(file_path, filename):
+def extract_docx(
+    file_path,
+    filename,
+):
 
-    document = Document(file_path)
+    try:
 
-    paragraphs = []
+        document = Document(
+            file_path
+        )
 
-    for paragraph in document.paragraphs:
+        paragraphs = []
 
-        text = paragraph.text.strip()
+        for paragraph in document.paragraphs:
 
-        if text:
-            paragraphs.append(text)
+            text = paragraph.text.strip()
 
-    full_text = "\n".join(paragraphs)
+            if text:
 
-    if not full_text.strip():
-        return []
+                paragraphs.append(
+                    text
+                )
 
-    return [
-        {
-            "text": full_text,
-            "filename": filename,
-            "page": None
-        }
-    ]
+        full_text = "\n".join(
+            paragraphs
+        )
+
+        if not full_text.strip():
+            return []
+
+        return [
+            {
+                "text": full_text,
+                "filename": filename,
+                "page": None,
+            }
+        ]
+
+    except Exception as error:
+
+        raise ValueError(
+            f"Could not extract DOCX '{filename}': {error}"
+        )
 
 
 # ============================================================
 # TXT EXTRACTION
 # ============================================================
 
-def extract_txt(file_path, filename):
+def extract_txt(
+    file_path,
+    filename,
+):
 
-    with open(
-        file_path,
-        "r",
-        encoding="utf-8",
-        errors="ignore"
-    ) as file:
+    try:
 
-        text = file.read()
+        with open(
+            file_path,
+            "r",
+            encoding="utf-8",
+            errors="ignore",
+        ) as file:
 
-    if not text.strip():
-        return []
+            text = file.read()
 
-    return [
-        {
-            "text": text,
-            "filename": filename,
-            "page": None
-        }
-    ]
+        if not text.strip():
+            return []
+
+        return [
+            {
+                "text": text,
+                "filename": filename,
+                "page": None,
+            }
+        ]
+
+    except Exception as error:
+
+        raise ValueError(
+            f"Could not extract TXT '{filename}': {error}"
+        )
 
 
 # ============================================================
 # MARKDOWN EXTRACTION
 # ============================================================
 
-def extract_md(file_path, filename):
+def extract_md(
+    file_path,
+    filename,
+):
 
-    with open(
-        file_path,
-        "r",
-        encoding="utf-8",
-        errors="ignore"
-    ) as file:
+    try:
 
-        text = file.read()
+        with open(
+            file_path,
+            "r",
+            encoding="utf-8",
+            errors="ignore",
+        ) as file:
 
-    if not text.strip():
-        return []
+            text = file.read()
 
-    return [
-        {
-            "text": text,
-            "filename": filename,
-            "page": None
-        }
-    ]
+        if not text.strip():
+            return []
+
+        return [
+            {
+                "text": text,
+                "filename": filename,
+                "page": None,
+            }
+        ]
+
+    except Exception as error:
+
+        raise ValueError(
+            f"Could not extract Markdown '{filename}': {error}"
+        )
 
 
 # ============================================================
 # DOCUMENT EXTRACTION ROUTER
 # ============================================================
 
-def extract_document(file_path, filename):
+def extract_document(
+    file_path,
+    filename,
+):
 
-    extension = Path(filename).suffix.lower()
+    extension = Path(
+        filename
+    ).suffix.lower()
 
     if extension == ".pdf":
 
         return extract_pdf(
             file_path,
-            filename
+            filename,
         )
 
     if extension == ".docx":
 
         return extract_docx(
             file_path,
-            filename
+            filename,
         )
 
     if extension == ".txt":
 
         return extract_txt(
             file_path,
-            filename
+            filename,
         )
 
     if extension == ".md":
 
         return extract_md(
             file_path,
-            filename
+            filename,
         )
 
     return []
 
 
 # ============================================================
-# CHUNKING
+# TEXT CHUNKING
 # ============================================================
 
-def chunk_text(documents):
+def chunk_text(
+    documents,
+):
 
     chunks = []
+
+    step = CHUNK_SIZE - CHUNK_OVERLAP
+
+    if step <= 0:
+
+        raise ValueError(
+            "CHUNK_OVERLAP must be smaller than CHUNK_SIZE."
+        )
 
     for document in documents:
 
         text = document["text"]
+
         filename = document["filename"]
+
         page = document["page"]
+
+        if not text:
+            continue
 
         start = 0
 
@@ -626,14 +700,14 @@ def chunk_text(documents):
                     {
                         "text": chunk,
                         "filename": filename,
-                        "page": page
+                        "page": page,
                     }
                 )
 
-            start += (
-                CHUNK_SIZE -
-                CHUNK_OVERLAP
-            )
+            if end >= len(text):
+                break
+
+            start += step
 
     return chunks
 
@@ -642,7 +716,16 @@ def chunk_text(documents):
 # EMBEDDINGS
 # ============================================================
 
-def create_embeddings(chunks):
+def create_embeddings(
+    chunks,
+):
+
+    if not chunks:
+
+        return np.empty(
+            (0, 384),
+            dtype="float32",
+        )
 
     texts = [
         chunk["text"]
@@ -653,17 +736,28 @@ def create_embeddings(chunks):
         texts,
         convert_to_numpy=True,
         normalize_embeddings=True,
-        show_progress_bar=False
+        show_progress_bar=False,
     )
 
-    return embeddings.astype("float32")
+    return np.asarray(
+        embeddings,
+        dtype="float32",
+    )
 
 
 # ============================================================
-# FAISS
+# FAISS INDEX
 # ============================================================
 
-def create_faiss_index(embeddings):
+def create_faiss_index(
+    embeddings,
+):
+
+    if embeddings is None:
+        return None
+
+    if len(embeddings) == 0:
+        return None
 
     dimension = embeddings.shape[1]
 
@@ -671,48 +765,60 @@ def create_faiss_index(embeddings):
         dimension
     )
 
-    index.add(embeddings)
+    index.add(
+        embeddings
+    )
 
     return index
 
 
 # ============================================================
-# TOKENIZATION
+# KEYWORD TOKENIZATION
 # ============================================================
+
+STOP_WORDS = {
+    "the",
+    "is",
+    "are",
+    "a",
+    "an",
+    "and",
+    "or",
+    "of",
+    "to",
+    "in",
+    "for",
+    "on",
+    "with",
+    "what",
+    "how",
+    "when",
+    "where",
+    "which",
+    "who",
+    "does",
+    "do",
+    "can",
+    "could",
+    "would",
+    "should",
+    "please",
+    "tell",
+    "me",
+}
+
 
 def tokenize(text):
 
     words = re.findall(
         r"\b[a-zA-Z0-9]+\b",
-        text.lower()
+        text.lower(),
     )
-
-    stop_words = {
-        "the",
-        "is",
-        "are",
-        "a",
-        "an",
-        "and",
-        "or",
-        "of",
-        "to",
-        "in",
-        "for",
-        "on",
-        "with",
-        "what",
-        "how",
-        "when",
-        "where",
-        "which",
-        "who"
-    }
 
     return [
         word
         for word in words
-        if word not in stop_words
+        if word not in STOP_WORDS
         and len(word) > 2
     ]
 
@@ -723,7 +829,7 @@ def tokenize(text):
 
 def keyword_score(
     question,
-    chunk_text
+    chunk_text,
 ):
 
     question_words = set(
@@ -738,13 +844,13 @@ def keyword_score(
         return 0.0
 
     matches = (
-        question_words.intersection(
-            chunk_words
-        )
+        question_words
+        .intersection(chunk_words)
     )
 
     return (
-        len(matches) /
+        len(matches)
+        /
         len(question_words)
     )
 
@@ -755,41 +861,51 @@ def keyword_score(
 
 def hybrid_search(
     question,
-    top_k=TOP_K
+    top_k=TOP_K,
 ):
 
     chunks = st.session_state.chunks
 
     index = st.session_state.faiss_index
 
-    if not chunks or index is None:
+    if not chunks:
+        return []
+
+    if index is None:
         return []
 
     question_embedding = embedding_model.encode(
         [question],
         convert_to_numpy=True,
-        normalize_embeddings=True
+        normalize_embeddings=True,
+        show_progress_bar=False,
     ).astype("float32")
+
+    semantic_k = min(
+        max(top_k * 3, top_k),
+        len(chunks),
+    )
 
     semantic_scores, semantic_indices = (
         index.search(
             question_embedding,
-            min(
-                top_k * 2,
-                len(chunks)
-            )
+            semantic_k,
         )
     )
 
     semantic_scores = semantic_scores[0]
+
     semantic_indices = semantic_indices[0]
 
     semantic_results = {}
 
     for score, index_number in zip(
         semantic_scores,
-        semantic_indices
+        semantic_indices,
     ):
+
+        if index_number < 0:
+            continue
 
         semantic_results[
             int(index_number)
@@ -803,12 +919,12 @@ def hybrid_search(
 
         semantic_score = semantic_results.get(
             index_number,
-            0.0
+            0.0,
         )
 
         keyword = keyword_score(
             question,
-            chunk["text"]
+            chunk["text"],
         )
 
         hybrid_score = (
@@ -824,16 +940,49 @@ def hybrid_search(
                 "page": chunk["page"],
                 "semantic_score": semantic_score,
                 "keyword_score": keyword,
-                "hybrid_score": hybrid_score
+                "hybrid_score": hybrid_score,
             }
         )
 
     results.sort(
         key=lambda item: item["hybrid_score"],
-        reverse=True
+        reverse=True,
     )
 
     return results[:top_k]
+
+
+# ============================================================
+# GROQ API KEY
+# ============================================================
+
+def get_groq_api_key():
+
+    # First try Streamlit secrets.
+    try:
+
+        api_key = st.secrets.get(
+            "GROQ_API_KEY"
+        )
+
+        if api_key:
+
+            return str(api_key).strip()
+
+    except Exception:
+        pass
+
+    # Environment variable fallback.
+    # Still never hardcoded.
+    api_key = os.environ.get(
+        "GROQ_API_KEY"
+    )
+
+    if api_key:
+
+        return api_key.strip()
+
+    return None
 
 
 # ============================================================
@@ -842,11 +991,10 @@ def hybrid_search(
 
 def get_groq_client():
 
-    api_key = st.secrets.get(
-        "GROQ_API_KEY"
-    )
+    api_key = get_groq_api_key()
 
     if not api_key:
+
         return None
 
     return Groq(
@@ -860,7 +1008,7 @@ def get_groq_client():
 
 def generate_answer(
     question,
-    retrieved_chunks
+    retrieved_chunks,
 ):
 
     client = get_groq_client()
@@ -868,25 +1016,35 @@ def generate_answer(
     if client is None:
 
         return (
-            "GROQ_API_KEY is not configured. "
-            "Please add GROQ_API_KEY to your "
-            "Streamlit secrets."
+            "GROQ_API_KEY is not configured.\n\n"
+            "Add the following secret to your Streamlit "
+            "app settings:\n\n"
+            "GROQ_API_KEY = \"your_api_key\""
+        )
+
+    if not retrieved_chunks:
+
+        return (
+            "The information is not available in the "
+            "provided documents."
         )
 
     context_parts = []
 
     for i, chunk in enumerate(
         retrieved_chunks,
-        start=1
+        start=1,
     ):
-
-        page_text = ""
 
         if chunk["page"] is not None:
 
             page_text = (
                 f", Page {chunk['page']}"
             )
+
+        else:
+
+            page_text = ""
 
         context_parts.append(
             f"""
@@ -903,59 +1061,131 @@ Content:
     )
 
     system_prompt = """
-You are an AI document assistant.
+You are an AI Document Assistant.
 
-Answer the user's question ONLY using
-the provided document context.
+Your job is to answer questions using ONLY
+the document context supplied by the user.
 
-Rules:
+STRICT RULES:
 
-1. Use only the provided context.
+1. Use only the provided document context.
 2. Do not use outside knowledge.
-3. Do not invent information.
-4. If the answer is not available in the context,
-   say exactly:
+3. Do not invent facts.
+4. Do not assume information that is not present.
+5. If the answer cannot be found in the context,
+   respond:
 
 "The information is not available in the
 provided documents."
 
-5. Keep answers clear and concise.
+6. Keep the answer clear and useful.
+7. When possible, mention the relevant policy,
+   document, section, or page based only on the
+   supplied context.
 """
 
     user_prompt = f"""
-DOCUMENT CONTEXT:
+DOCUMENT CONTEXT
+================
 
 {context}
 
-USER QUESTION:
+USER QUESTION
+=============
 
 {question}
 """
 
-    response = client.chat.completions.create(
-        model=GROQ_MODEL,
-        messages=[
-            {
-                "role": "system",
-                "content": system_prompt
-            },
-            {
-                "role": "user",
-                "content": user_prompt
-            }
-        ],
-        temperature=0,
-        max_tokens=700
-    )
+    try:
 
-    return response.choices[0].message.content
+        response = client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": system_prompt,
+                },
+                {
+                    "role": "user",
+                    "content": user_prompt,
+                },
+            ],
+            temperature=0,
+            max_completion_tokens=700,
+        )
+
+        if not response.choices:
+
+            return (
+                "The AI model returned no answer."
+            )
+
+        answer = response.choices[0].message.content
+
+        if not answer:
+
+            return (
+                "The AI model returned an empty answer."
+            )
+
+        return answer.strip()
+
+    except AuthenticationError:
+
+        return (
+            "The GROQ_API_KEY is invalid or not authorized. "
+            "Please update the GROQ_API_KEY in Streamlit "
+            "Secrets."
+        )
+
+    except APIStatusError as error:
+
+        if getattr(error, "status_code", None) == 404:
+
+            return (
+                f"The configured Groq model "
+                f"'{GROQ_MODEL}' is unavailable for this "
+                f"API project. Please check the Groq model "
+                f"permissions."
+            )
+
+        if getattr(error, "status_code", None) == 429:
+
+            return (
+                "Groq rate limit reached. Please wait a "
+                "moment and try again."
+            )
+
+        return (
+            "Groq returned an API error while generating "
+            "the answer."
+        )
+
+    except APIConnectionError:
+
+        return (
+            "Could not connect to Groq. Please try again."
+        )
+
+    except Exception as error:
+
+        return (
+            "An unexpected error occurred while generating "
+            "the answer.\n\n"
+            f"Details: {error}"
+        )
 
 
 # ============================================================
 # PROCESS DOCUMENTS
 # ============================================================
 
-def process_documents(documents):
+def process_documents(
+    documents,
+):
+
+    if not documents:
+        return False
 
     chunks = chunk_text(
         documents
@@ -965,16 +1195,24 @@ def process_documents(documents):
         return False
 
     with st.spinner(
-        "Building your document knowledge base..."
+        "Creating document embeddings..."
     ):
 
         embeddings = create_embeddings(
             chunks
         )
 
+        if embeddings.size == 0:
+
+            return False
+
         index = create_faiss_index(
             embeddings
         )
+
+        if index is None:
+
+            return False
 
     st.session_state.documents = documents
 
@@ -990,47 +1228,60 @@ def process_documents(documents):
 
 
 # ============================================================
-# GOOGLE DRIVE
+# GOOGLE DRIVE DOWNLOAD
 # ============================================================
 
-def load_from_google_drive(url):
+def load_from_google_drive(
+    url,
+):
+
+    url = url.strip()
+
+    if not url:
+        return []
 
     temp_directory = tempfile.mkdtemp()
 
     try:
 
         # ----------------------------------------------------
-        # FOLDER
+        # GOOGLE DRIVE FOLDER
         # ----------------------------------------------------
 
         if "/folders/" in url:
 
-            downloaded = gdown.download_folder(
-                url=url,
-                output=temp_directory,
-                quiet=True
+            downloaded_files = (
+                gdown.download_folder(
+                    url=url,
+                    output=temp_directory,
+                    quiet=True,
+                    use_cookies=False,
+                )
             )
 
-            if not downloaded:
+            if not downloaded_files:
+
                 return []
 
             file_paths = []
 
-            for path in downloaded:
+            for item in downloaded_files:
 
-                path = Path(path)
+                path = Path(item)
 
-                if path.suffix.lower() in {
-                    ".pdf",
-                    ".docx",
-                    ".txt",
-                    ".md"
-                }:
+                if (
+                    path.is_file()
+                    and
+                    path.suffix.lower()
+                    in SUPPORTED_EXTENSIONS
+                ):
 
-                    file_paths.append(path)
+                    file_paths.append(
+                        path
+                    )
 
         # ----------------------------------------------------
-        # FILE
+        # GOOGLE DRIVE FILE
         # ----------------------------------------------------
 
         else:
@@ -1038,68 +1289,83 @@ def load_from_google_drive(url):
             downloaded_path = gdown.download(
                 url=url,
                 output=temp_directory,
-                quiet=True
+                quiet=True,
+                fuzzy=True,
+                use_cookies=False,
             )
 
             if not downloaded_path:
+
                 return []
 
             downloaded_path = Path(
                 downloaded_path
             )
 
-            if downloaded_path.is_dir():
-
-                file_paths = [
-                    path
-                    for path in downloaded_path.rglob("*")
-                    if path.suffix.lower() in {
-                        ".pdf",
-                        ".docx",
-                        ".txt",
-                        ".md"
-                    }
-                ]
-
-            else:
+            if downloaded_path.is_file():
 
                 file_paths = [
                     downloaded_path
                 ]
 
+            else:
+
+                file_paths = [
+                    path
+                    for path in downloaded_path.rglob("*")
+                    if (
+                        path.is_file()
+                        and
+                        path.suffix.lower()
+                        in SUPPORTED_EXTENSIONS
+                    )
+                ]
+
         # ----------------------------------------------------
-        # EXTRACTION
+        # EXTRACT
         # ----------------------------------------------------
 
         documents = []
 
         for file_path in file_paths:
 
-            if file_path.suffix.lower() not in {
-                ".pdf",
-                ".docx",
-                ".txt",
-                ".md"
-            }:
+            extension = (
+                file_path.suffix.lower()
+            )
+
+            if extension not in SUPPORTED_EXTENSIONS:
                 continue
 
             filename = file_path.name
 
-            extracted = extract_document(
-                str(file_path),
-                filename
-            )
+            try:
 
-            documents.extend(
-                extracted
-            )
+                extracted = extract_document(
+                    str(file_path),
+                    filename,
+                )
+
+                documents.extend(
+                    extracted
+                )
+
+            except Exception as error:
+
+                st.warning(
+                    f"Could not process "
+                    f"'{filename}': {error}"
+                )
 
         return documents
 
     except Exception as error:
 
         st.error(
-            f"Could not load Google Drive content: {error}"
+            "Could not load the Google Drive source."
+        )
+
+        st.caption(
+            f"Details: {error}"
         )
 
         return []
@@ -1113,15 +1379,15 @@ st.sidebar.markdown(
     '<div class="sidebar-title">'
     'Document Sources'
     '</div>',
-    unsafe_allow_html=True
+    unsafe_allow_html=True,
 )
 
 st.sidebar.markdown(
     '<div class="sidebar-description">'
-    'Upload files or connect a public Google Drive '
-    'source to build your knowledge base.'
+    'Upload local documents or connect a public '
+    'Google Drive file or folder.'
     '</div>',
-    unsafe_allow_html=True
+    unsafe_allow_html=True,
 )
 
 
@@ -1133,19 +1399,19 @@ st.sidebar.markdown(
     '<div class="sidebar-heading">'
     '📁 Local Documents'
     '</div>',
-    unsafe_allow_html=True
+    unsafe_allow_html=True,
 )
 
 uploaded_files = st.sidebar.file_uploader(
-    "Upload PDF, DOCX, TXT or MD",
+    "Upload PDF, DOCX, TXT or MD files",
     type=[
         "pdf",
         "docx",
         "txt",
-        "md"
+        "md",
     ],
     accept_multiple_files=True,
-    label_visibility="collapsed"
+    label_visibility="collapsed",
 )
 
 if uploaded_files:
@@ -1163,12 +1429,12 @@ st.sidebar.markdown(
     '<div class="sidebar-heading">'
     '☁️ Google Drive'
     '</div>',
-    unsafe_allow_html=True
+    unsafe_allow_html=True,
 )
 
 drive_url = st.sidebar.text_input(
     "Google Drive URL",
-    placeholder="Paste a public Drive file or folder link"
+    placeholder="Paste a public Drive file or folder link",
 )
 
 st.sidebar.caption(
@@ -1185,49 +1451,78 @@ st.sidebar.markdown("")
 process_button = st.sidebar.button(
     "⚡ Process Documents",
     type="primary",
-    use_container_width=True
+    use_container_width=True,
 )
 
 
 # ============================================================
-# PROCESS DOCUMENTS
+# PROCESS LOCAL + DRIVE DOCUMENTS
 # ============================================================
 
 if process_button:
 
     all_documents = []
 
+    processing_errors = []
+
     # --------------------------------------------------------
-    # LOCAL FILES
+    # LOCAL UPLOADS
     # --------------------------------------------------------
 
     if uploaded_files:
 
         for uploaded_file in uploaded_files:
 
-            suffix = Path(
-                uploaded_file.name
+            filename = uploaded_file.name
+
+            extension = Path(
+                filename
             ).suffix.lower()
 
-            with tempfile.NamedTemporaryFile(
-                delete=False,
-                suffix=suffix
-            ) as temp_file:
+            if extension not in SUPPORTED_EXTENSIONS:
 
-                temp_file.write(
-                    uploaded_file.getbuffer()
+                processing_errors.append(
+                    f"{filename}: unsupported file type"
                 )
 
-                temp_path = temp_file.name
+                continue
 
-            extracted = extract_document(
-                temp_path,
-                uploaded_file.name
-            )
+            try:
 
-            all_documents.extend(
-                extracted
-            )
+                with tempfile.NamedTemporaryFile(
+                    delete=False,
+                    suffix=extension,
+                ) as temp_file:
+
+                    temp_file.write(
+                        uploaded_file.getbuffer()
+                    )
+
+                    temp_path = temp_file.name
+
+                try:
+
+                    extracted = extract_document(
+                        temp_path,
+                        filename,
+                    )
+
+                    all_documents.extend(
+                        extracted
+                    )
+
+                finally:
+
+                    try:
+                        os.remove(temp_path)
+                    except OSError:
+                        pass
+
+            except Exception as error:
+
+                processing_errors.append(
+                    f"{filename}: {error}"
+                )
 
     # --------------------------------------------------------
     # GOOGLE DRIVE
@@ -1241,7 +1536,7 @@ if process_button:
 
             drive_documents = (
                 load_from_google_drive(
-                    drive_url.strip()
+                    drive_url
                 )
             )
 
@@ -1250,25 +1545,59 @@ if process_button:
             )
 
     # --------------------------------------------------------
-    # PROCESS
+    # PROCESS EVERYTHING
     # --------------------------------------------------------
 
     if all_documents:
 
-        success = process_documents(
-            all_documents
-        )
+        try:
 
-        if success:
+            success = process_documents(
+                all_documents
+            )
 
-            st.sidebar.success(
-                "Knowledge base ready."
+            if success:
+
+                st.sidebar.success(
+                    "Knowledge base ready."
+                )
+
+                st.sidebar.info(
+                    f"{len(all_documents)} extracted "
+                    f"document section(s)"
+                )
+
+            else:
+
+                st.sidebar.error(
+                    "Documents were found, but no searchable "
+                    "text could be created."
+                )
+
+        except Exception as error:
+
+            st.sidebar.error(
+                "Document processing failed."
+            )
+
+            st.sidebar.caption(
+                f"Details: {error}"
             )
 
     else:
 
         st.sidebar.warning(
-            "No supported documents found."
+            "No supported document text was found."
+        )
+
+    # --------------------------------------------------------
+    # PROCESSING WARNINGS
+    # --------------------------------------------------------
+
+    for error_message in processing_errors:
+
+        st.sidebar.warning(
+            error_message
         )
 
 
@@ -1288,7 +1617,7 @@ if st.session_state.documents:
 
             unique_documents[filename] = {
                 "pages": set(),
-                "characters": 0
+                "characters": 0,
             }
 
         page = document["page"]
@@ -1318,9 +1647,8 @@ if st.session_state.documents:
         for item in unique_documents.values()
     )
 
-
     # --------------------------------------------------------
-    # SECTION
+    # SECTION HEADER
     # --------------------------------------------------------
 
     st.markdown(
@@ -1330,11 +1658,10 @@ if st.session_state.documents:
         '</div>'
         '<div class="section-description">'
         'Your processed documents are ready for semantic '
-        'and keyword-based search.'
+        'and keyword-based retrieval.'
         '</div>',
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
-
 
     # --------------------------------------------------------
     # METRICS
@@ -1353,7 +1680,7 @@ if st.session_state.documents:
             f'Documents'
             f'</div>'
             f'</div>',
-            unsafe_allow_html=True
+            unsafe_allow_html=True,
         )
 
     with col2:
@@ -1367,7 +1694,7 @@ if st.session_state.documents:
             f'Searchable Chunks'
             f'</div>'
             f'</div>',
-            unsafe_allow_html=True
+            unsafe_allow_html=True,
         )
 
     with col3:
@@ -1381,15 +1708,13 @@ if st.session_state.documents:
             f'Characters'
             f'</div>'
             f'</div>',
-            unsafe_allow_html=True
+            unsafe_allow_html=True,
         )
-
 
     st.markdown(
         "<br>",
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
-
 
     # --------------------------------------------------------
     # DOCUMENT LIST
@@ -1427,18 +1752,17 @@ if st.session_state.documents:
             f'{information["characters"]:,} characters'
             f'</div>'
             f'</div>',
-            unsafe_allow_html=True
+            unsafe_allow_html=True,
         )
-
 
     st.markdown(
         '</div>',
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
 
 
 # ============================================================
-# ASK DOCUMENTS
+# ASK YOUR DOCUMENTS
 # ============================================================
 
 st.markdown(
@@ -1447,31 +1771,28 @@ st.markdown(
     '💬 Ask Your Documents'
     '</div>'
     '<div class="section-description">'
-    'Ask a question about your uploaded documents. '
-    'The assistant retrieves the most relevant passages '
-    'before generating an answer.'
+    'Ask a question about your processed documents. '
+    'The assistant retrieves relevant passages before '
+    'generating an answer.'
     '</div>',
-    unsafe_allow_html=True
+    unsafe_allow_html=True,
 )
-
 
 question = st.text_input(
     "Question",
     placeholder="What is the annual leave policy?",
-    label_visibility="collapsed"
+    label_visibility="collapsed",
 )
-
 
 ask_button = st.button(
     "🔍 Ask Assistant",
     type="primary",
-    use_container_width=True
+    use_container_width=True,
 )
-
 
 st.markdown(
     '</div>',
-    unsafe_allow_html=True
+    unsafe_allow_html=True,
 )
 
 
@@ -1481,11 +1802,19 @@ st.markdown(
 
 if ask_button:
 
+    # --------------------------------------------------------
+    # NO DOCUMENTS
+    # --------------------------------------------------------
+
     if not st.session_state.processed:
 
         st.warning(
             "Please upload and process documents first."
         )
+
+    # --------------------------------------------------------
+    # EMPTY QUESTION
+    # --------------------------------------------------------
 
     elif not question.strip():
 
@@ -1493,11 +1822,11 @@ if ask_button:
             "Please enter a question."
         )
 
-    else:
+    # --------------------------------------------------------
+    # ASK
+    # --------------------------------------------------------
 
-        # ----------------------------------------------------
-        # SEARCH
-        # ----------------------------------------------------
+    else:
 
         with st.spinner(
             "Searching your knowledge base..."
@@ -1505,9 +1834,8 @@ if ask_button:
 
             retrieved_chunks = hybrid_search(
                 question,
-                top_k=TOP_K
+                top_k=TOP_K,
             )
-
 
         if not retrieved_chunks:
 
@@ -1518,22 +1846,17 @@ if ask_button:
 
         else:
 
-            # ------------------------------------------------
-            # GENERATE
-            # ------------------------------------------------
-
             with st.spinner(
                 "Generating answer..."
             ):
 
                 answer = generate_answer(
                     question,
-                    retrieved_chunks
+                    retrieved_chunks,
                 )
 
-
             # ------------------------------------------------
-            # SAFE HTML
+            # ESCAPE HTML CONTENT
             # ------------------------------------------------
 
             safe_question = html.escape(
@@ -1544,26 +1867,22 @@ if ask_button:
                 answer
             )
 
-
             # ------------------------------------------------
             # USER MESSAGE
             # ------------------------------------------------
 
             st.markdown(
                 f'<div class="user-message">'
-                f'<div class="user-label">'
-                f'YOU'
-                f'</div>'
+                f'<div class="user-label">YOU</div>'
                 f'<div class="user-text">'
                 f'{safe_question}'
                 f'</div>'
                 f'</div>',
-                unsafe_allow_html=True
+                unsafe_allow_html=True,
             )
 
-
             # ------------------------------------------------
-            # AI MESSAGE
+            # AI ANSWER
             # ------------------------------------------------
 
             st.markdown(
@@ -1575,9 +1894,8 @@ if ask_button:
                 f'{safe_answer}'
                 f'</div>'
                 f'</div>',
-                unsafe_allow_html=True
+                unsafe_allow_html=True,
             )
-
 
             # ------------------------------------------------
             # SOURCES
@@ -1587,25 +1905,20 @@ if ask_button:
                 '<div class="sources-title">'
                 '📚 Retrieved Sources'
                 '</div>',
-                unsafe_allow_html=True
+                unsafe_allow_html=True,
             )
 
             st.markdown(
                 f'<div class="sources-description">'
                 f'{len(retrieved_chunks)} relevant chunks '
-                f'used to generate this answer.'
+                f'were retrieved for this answer.'
                 f'</div>',
-                unsafe_allow_html=True
+                unsafe_allow_html=True,
             )
-
-
-            # ------------------------------------------------
-            # SOURCE CARDS
-            # ------------------------------------------------
 
             for i, source in enumerate(
                 retrieved_chunks,
-                start=1
+                start=1,
             ):
 
                 if source["page"] is not None:
@@ -1646,16 +1959,16 @@ if ask_button:
                         f'{safe_text}'
                         f'</div>'
                         f'</div>',
-                        unsafe_allow_html=True
+                        unsafe_allow_html=True,
                     )
 
                     st.caption(
                         f"Semantic: "
                         f"{source['semantic_score']:.3f}"
-                        f"   •   "
+                        f"  •  "
                         f"Keyword: "
                         f"{source['keyword_score']:.3f}"
-                        f"   •   "
+                        f"  •  "
                         f"Hybrid: "
                         f"{source['hybrid_score']:.3f}"
                     )
