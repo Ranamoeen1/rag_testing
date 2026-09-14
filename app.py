@@ -36,8 +36,7 @@ DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
 # Use a currently available Groq model through the Groq API.
 # This can also be overridden through Streamlit secrets.
-DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
-
+DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b"
 CHUNK_SIZE = 900
 CHUNK_OVERLAP = 150
 
