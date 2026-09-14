@@ -1,4 +1,3 @@
-```python
 import os
 import re
 from io import BytesIO
@@ -3470,4 +3469,4 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-```
+
