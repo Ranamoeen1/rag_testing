@@ -1,5 +1,6 @@
 import os
 import re
+import html
 import tempfile
 from pathlib import Path
 
@@ -24,12 +25,12 @@ TOP_K = 5
 
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
-# Current Groq model
+# Groq model
 GROQ_MODEL = "openai/gpt-oss-20b"
 
 
 # ============================================================
-# PAGE CONFIGURATION
+# PAGE CONFIG
 # ============================================================
 
 st.set_page_config(
@@ -41,312 +42,354 @@ st.set_page_config(
 
 
 # ============================================================
-# MODERN UI CSS
+# PROFESSIONAL UI
 # ============================================================
 
 st.markdown(
     """
-    <style>
+<style>
+/* ==========================================================
+   GLOBAL
+   ========================================================== */
 
-    /* ======================================================
-       GLOBAL
-       ====================================================== */
+.stApp {
+    background: #f6f8fb;
+}
 
-    .stApp {
-        background: #f7f8fc;
-    }
-
-    .main .block-container {
-        max-width: 1200px;
-        padding-top: 2rem;
-        padding-bottom: 4rem;
-    }
-
-    h1, h2, h3 {
-        color: #172033;
-    }
-
-    p {
-        color: #5f6b7a;
-    }
+.main .block-container {
+    max-width: 1180px;
+    padding-top: 35px;
+    padding-bottom: 60px;
+}
 
 
-    /* ======================================================
-       HERO
-       ====================================================== */
+/* ==========================================================
+   HEADER
+   ========================================================== */
 
-    .hero {
-        background: white;
-        padding: 30px 34px;
-        border-radius: 18px;
-        border: 1px solid #e7eaf0;
-        margin-bottom: 24px;
-        box-shadow: 0 4px 18px rgba(20, 30, 50, 0.04);
-    }
+.app-header {
+    background: #ffffff;
+    border: 1px solid #e4e8ef;
+    border-radius: 18px;
+    padding: 30px 34px;
+    margin-bottom: 24px;
+    box-shadow: 0 4px 20px rgba(15, 23, 42, 0.04);
+}
 
-    .hero-title {
-        font-size: 32px;
-        font-weight: 700;
-        color: #172033;
-        margin-bottom: 6px;
-    }
+.app-header-title {
+    font-size: 31px;
+    font-weight: 750;
+    color: #172033;
+    line-height: 1.2;
+    margin: 0;
+}
 
-    .hero-subtitle {
-        font-size: 15px;
-        color: #6b7280;
-        margin: 0;
-        line-height: 1.6;
-    }
-
-
-    /* ======================================================
-       CARDS
-       ====================================================== */
-
-    .card {
-        background: white;
-        border: 1px solid #e7eaf0;
-        border-radius: 16px;
-        padding: 22px;
-        margin-bottom: 18px;
-        box-shadow: 0 3px 15px rgba(20, 30, 50, 0.035);
-    }
-
-    .card-title {
-        font-size: 18px;
-        font-weight: 650;
-        color: #172033;
-        margin-bottom: 5px;
-    }
-
-    .card-description {
-        font-size: 14px;
-        color: #6b7280;
-        margin-bottom: 16px;
-        line-height: 1.5;
-    }
+.app-header-subtitle {
+    color: #6b7280;
+    font-size: 15px;
+    line-height: 1.6;
+    margin-top: 9px;
+}
 
 
-    /* ======================================================
-       METRIC CARDS
-       ====================================================== */
+/* ==========================================================
+   SECTION
+   ========================================================== */
 
-    .metric-card {
-        background: white;
-        border: 1px solid #e7eaf0;
-        border-radius: 14px;
-        padding: 18px;
-        text-align: center;
-        box-shadow: 0 3px 12px rgba(20, 30, 50, 0.03);
-    }
+.section {
+    background: #ffffff;
+    border: 1px solid #e4e8ef;
+    border-radius: 16px;
+    padding: 24px;
+    margin-bottom: 22px;
+    box-shadow: 0 3px 16px rgba(15, 23, 42, 0.035);
+}
 
-    .metric-number {
-        font-size: 25px;
-        font-weight: 700;
-        color: #172033;
-    }
+.section-title {
+    color: #172033;
+    font-size: 19px;
+    font-weight: 700;
+    margin-bottom: 5px;
+}
 
-    .metric-label {
-        font-size: 13px;
-        color: #7b8492;
-        margin-top: 4px;
-    }
-
-
-    /* ======================================================
-       DOCUMENT SOURCE CARDS
-       ====================================================== */
-
-    .source-card {
-        background: #fafbfc;
-        border: 1px solid #e4e7ec;
-        border-radius: 12px;
-        padding: 16px;
-        margin: 10px 0;
-    }
-
-    .source-file {
-        font-size: 14px;
-        font-weight: 650;
-        color: #273142;
-    }
-
-    .source-page {
-        font-size: 12px;
-        color: #7b8492;
-        margin-top: 4px;
-    }
-
-    .source-text {
-        font-size: 13px;
-        line-height: 1.65;
-        color: #525c6b;
-        margin-top: 12px;
-        white-space: pre-wrap;
-    }
+.section-description {
+    color: #737d8c;
+    font-size: 14px;
+    line-height: 1.55;
+    margin-bottom: 18px;
+}
 
 
-    /* ======================================================
-       SOURCE SECTION
-       ====================================================== */
+/* ==========================================================
+   METRICS
+   ========================================================== */
 
-    .source-header {
-        font-size: 18px;
-        font-weight: 650;
-        color: #172033;
-        margin-top: 28px;
-        margin-bottom: 6px;
-    }
+.metric-card {
+    background: #f9fafc;
+    border: 1px solid #e5e9ef;
+    border-radius: 13px;
+    padding: 18px 12px;
+    text-align: center;
+    min-height: 92px;
+}
 
+.metric-value {
+    color: #172033;
+    font-size: 25px;
+    font-weight: 750;
+}
 
-    /* ======================================================
-       CHAT
-       ====================================================== */
-
-    .chat-user {
-        background: #eef3ff;
-        border: 1px solid #dce5ff;
-        padding: 16px 18px;
-        border-radius: 14px;
-        margin: 12px 0;
-    }
-
-    .chat-user-label {
-        font-size: 11px;
-        font-weight: 700;
-        color: #5269a6;
-        margin-bottom: 6px;
-        letter-spacing: 0.5px;
-    }
-
-    .chat-user-text {
-        font-size: 15px;
-        color: #25304a;
-        line-height: 1.6;
-    }
+.metric-label {
+    color: #7b8492;
+    font-size: 12px;
+    margin-top: 4px;
+}
 
 
-    .chat-assistant {
-        background: white;
-        border: 1px solid #e5e8ee;
-        padding: 20px;
-        border-radius: 14px;
-        margin: 12px 0 22px 0;
-        box-shadow: 0 3px 12px rgba(20, 30, 50, 0.03);
-    }
+/* ==========================================================
+   DOCUMENTS
+   ========================================================== */
 
-    .chat-assistant-label {
-        font-size: 11px;
-        font-weight: 700;
-        color: #596579;
-        margin-bottom: 8px;
-        letter-spacing: 0.5px;
-    }
+.document-card {
+    background: #fafbfc;
+    border: 1px solid #e4e8ef;
+    border-radius: 11px;
+    padding: 14px 16px;
+    margin-top: 9px;
+}
 
-    .chat-assistant-text {
-        font-size: 15px;
-        line-height: 1.7;
-        color: #252b36;
-        white-space: pre-wrap;
-    }
+.document-name {
+    color: #202938;
+    font-size: 14px;
+    font-weight: 650;
+}
 
-
-    /* ======================================================
-       SIDEBAR
-       ====================================================== */
-
-    section[data-testid="stSidebar"] {
-        background: white;
-        border-right: 1px solid #e7eaf0;
-    }
-
-    section[data-testid="stSidebar"] .block-container {
-        padding-top: 2rem;
-    }
-
-    .sidebar-title {
-        font-size: 21px;
-        font-weight: 700;
-        color: #172033;
-        margin-bottom: 5px;
-    }
-
-    .sidebar-subtitle {
-        font-size: 13px;
-        color: #7b8492;
-        margin-bottom: 20px;
-        line-height: 1.5;
-    }
+.document-meta {
+    color: #7b8492;
+    font-size: 12px;
+    margin-top: 4px;
+}
 
 
-    /* ======================================================
-       FILE UPLOADER
-       ====================================================== */
+/* ==========================================================
+   CHAT
+   ========================================================== */
 
-    [data-testid="stFileUploader"] {
-        background: #fafbfc;
-        border: 1px dashed #cbd2dc;
-        border-radius: 14px;
-        padding: 8px;
-    }
+.user-message {
+    background: #eef4ff;
+    border: 1px solid #dce7ff;
+    border-radius: 14px;
+    padding: 16px 18px;
+    margin: 12px 0;
+}
 
+.user-label {
+    color: #5570ad;
+    font-size: 11px;
+    font-weight: 750;
+    letter-spacing: 0.6px;
+    margin-bottom: 7px;
+}
 
-    /* ======================================================
-       BUTTONS
-       ====================================================== */
+.user-text {
+    color: #27344f;
+    font-size: 15px;
+    line-height: 1.6;
+}
 
-    .stButton > button {
-        border-radius: 10px;
-        border: 1px solid #d9dee7;
-        min-height: 42px;
-        font-weight: 600;
-        transition: all 0.2s ease;
-    }
+.ai-message {
+    background: #ffffff;
+    border: 1px solid #e2e7ee;
+    border-radius: 14px;
+    padding: 20px;
+    margin: 12px 0 24px 0;
+    box-shadow: 0 3px 13px rgba(15, 23, 42, 0.035);
+}
 
-    .stButton > button:hover {
-        border-color: #8b98ad;
-        transform: translateY(-1px);
-    }
+.ai-label {
+    color: #596579;
+    font-size: 11px;
+    font-weight: 750;
+    letter-spacing: 0.6px;
+    margin-bottom: 9px;
+}
 
-
-    /* ======================================================
-       INPUTS
-       ====================================================== */
-
-    .stTextInput input {
-        border-radius: 10px;
-        border: 1px solid #d9dee7;
-        padding: 12px;
-    }
-
-    .stTextInput input:focus {
-        border-color: #8b98ad;
-        box-shadow: none;
-    }
-
-
-    /* ======================================================
-       EXPANDERS
-       ====================================================== */
-
-    .streamlit-expanderHeader {
-        border-radius: 10px;
-        font-weight: 600;
-    }
+.ai-text {
+    color: #252c38;
+    font-size: 15px;
+    line-height: 1.75;
+}
 
 
-    /* ======================================================
-       DIVIDER
-       ====================================================== */
+/* ==========================================================
+   SOURCES
+   ========================================================== */
 
-    hr {
-        border: none;
-        border-top: 1px solid #e7eaf0;
-        margin: 25px 0;
-    }
+.sources-title {
+    color: #172033;
+    font-size: 19px;
+    font-weight: 700;
+    margin-top: 28px;
+    margin-bottom: 4px;
+}
 
-    </style>
-    """,
+.sources-description {
+    color: #7a8494;
+    font-size: 13px;
+    margin-bottom: 12px;
+}
+
+.source-box {
+    background: #fafbfc;
+    border: 1px solid #e4e8ef;
+    border-radius: 11px;
+    padding: 16px;
+}
+
+.source-file {
+    color: #202938;
+    font-size: 14px;
+    font-weight: 650;
+}
+
+.source-page {
+    color: #7b8492;
+    font-size: 12px;
+    margin-top: 4px;
+}
+
+.source-text {
+    color: #525d6d;
+    font-size: 13px;
+    line-height: 1.7;
+    margin-top: 12px;
+}
+
+
+/* ==========================================================
+   SIDEBAR
+   ========================================================== */
+
+section[data-testid="stSidebar"] {
+    background: #ffffff;
+    border-right: 1px solid #e4e8ef;
+}
+
+section[data-testid="stSidebar"] .block-container {
+    padding-top: 30px;
+}
+
+.sidebar-title {
+    color: #172033;
+    font-size: 21px;
+    font-weight: 750;
+    margin-bottom: 5px;
+}
+
+.sidebar-description {
+    color: #7a8494;
+    font-size: 13px;
+    line-height: 1.55;
+    margin-bottom: 20px;
+}
+
+.sidebar-heading {
+    color: #303b4d;
+    font-size: 14px;
+    font-weight: 700;
+    margin-top: 18px;
+    margin-bottom: 8px;
+}
+
+
+/* ==========================================================
+   UPLOADER
+   ========================================================== */
+
+[data-testid="stFileUploader"] {
+    background: #fafbfc;
+    border: 1px dashed #cbd3df;
+    border-radius: 12px;
+    padding: 7px;
+}
+
+
+/* ==========================================================
+   INPUTS
+   ========================================================== */
+
+.stTextInput input {
+    background: #ffffff;
+    color: #202938;
+    border: 1px solid #d9dfe8;
+    border-radius: 10px;
+    min-height: 44px;
+}
+
+.stTextInput input:focus {
+    border-color: #8996a9;
+    box-shadow: 0 0 0 1px #8996a9;
+}
+
+
+/* ==========================================================
+   BUTTONS
+   ========================================================== */
+
+.stButton > button {
+    border-radius: 10px;
+    min-height: 43px;
+    font-weight: 650;
+    border: 1px solid #d7dde6;
+}
+
+.stButton > button:hover {
+    border-color: #9aa6b7;
+}
+
+
+/* ==========================================================
+   EXPANDERS
+   ========================================================== */
+
+[data-testid="stExpander"] {
+    background: #ffffff;
+    border: 1px solid #e1e6ed;
+    border-radius: 11px;
+    margin-bottom: 8px;
+}
+
+
+/* ==========================================================
+   STATUS
+   ========================================================== */
+
+.status-success {
+    display: inline-block;
+    background: #edf8f1;
+    border: 1px solid #d4eedc;
+    color: #287344;
+    border-radius: 20px;
+    padding: 5px 11px;
+    font-size: 12px;
+    font-weight: 650;
+}
+
+
+/* ==========================================================
+   HIDE UNNECESSARY ELEMENTS
+   ========================================================== */
+
+#MainMenu {
+    visibility: hidden;
+}
+
+footer {
+    visibility: hidden;
+}
+
+</style>
+""",
     unsafe_allow_html=True
 )
 
@@ -356,18 +399,15 @@ st.markdown(
 # ============================================================
 
 st.markdown(
-    """
-    <div class="hero">
-        <div class="hero-title">
-            📚 AI Document Assistant
-        </div>
-
-        <p class="hero-subtitle">
-            Ask questions about your documents and get answers
-            grounded in your uploaded knowledge base.
-        </p>
-    </div>
-    """,
+    '<div class="app-header">'
+    '<div class="app-header-title">'
+    '📚 AI Document Assistant'
+    '</div>'
+    '<div class="app-header-subtitle">'
+    'Upload your documents, build a searchable knowledge base, '
+    'and ask questions using AI-powered document retrieval.'
+    '</div>'
+    '</div>',
     unsafe_allow_html=True
 )
 
@@ -393,7 +433,7 @@ if "processed" not in st.session_state:
 
 
 # ============================================================
-# LOAD EMBEDDING MODEL ONCE
+# EMBEDDING MODEL
 # ============================================================
 
 @st.cache_resource
@@ -405,15 +445,10 @@ embedding_model = load_embedding_model()
 
 
 # ============================================================
-# DOCUMENT EXTRACTION
+# PDF EXTRACTION
 # ============================================================
 
 def extract_pdf(file_path, filename):
-    """
-    Extract text from PDF.
-
-    Page number is preserved.
-    """
 
     documents = []
 
@@ -439,13 +474,11 @@ def extract_pdf(file_path, filename):
     return documents
 
 
-def extract_docx(file_path, filename):
-    """
-    Extract text from DOCX.
+# ============================================================
+# DOCX EXTRACTION
+# ============================================================
 
-    DOCX page numbers are not reliably available,
-    so page is stored as None.
-    """
+def extract_docx(file_path, filename):
 
     document = Document(file_path)
 
@@ -472,10 +505,11 @@ def extract_docx(file_path, filename):
     ]
 
 
+# ============================================================
+# TXT EXTRACTION
+# ============================================================
+
 def extract_txt(file_path, filename):
-    """
-    Extract text from TXT.
-    """
 
     with open(
         file_path,
@@ -497,11 +531,12 @@ def extract_txt(file_path, filename):
         }
     ]
 
+
+# ============================================================
+# MARKDOWN EXTRACTION
+# ============================================================
 
 def extract_md(file_path, filename):
-    """
-    Extract text from Markdown.
-    """
 
     with open(
         file_path,
@@ -524,32 +559,37 @@ def extract_md(file_path, filename):
     ]
 
 
+# ============================================================
+# DOCUMENT EXTRACTION ROUTER
+# ============================================================
+
 def extract_document(file_path, filename):
-    """
-    Select extraction function based on extension.
-    """
 
     extension = Path(filename).suffix.lower()
 
     if extension == ".pdf":
+
         return extract_pdf(
             file_path,
             filename
         )
 
-    elif extension == ".docx":
+    if extension == ".docx":
+
         return extract_docx(
             file_path,
             filename
         )
 
-    elif extension == ".txt":
+    if extension == ".txt":
+
         return extract_txt(
             file_path,
             filename
         )
 
-    elif extension == ".md":
+    if extension == ".md":
+
         return extract_md(
             file_path,
             filename
@@ -559,15 +599,10 @@ def extract_document(file_path, filename):
 
 
 # ============================================================
-# TEXT CHUNKING
+# CHUNKING
 # ============================================================
 
 def chunk_text(documents):
-    """
-    Split extracted documents into overlapping chunks.
-
-    Filename and page metadata are preserved.
-    """
 
     chunks = []
 
@@ -604,13 +639,10 @@ def chunk_text(documents):
 
 
 # ============================================================
-# CREATE EMBEDDINGS
+# EMBEDDINGS
 # ============================================================
 
 def create_embeddings(chunks):
-    """
-    Create embeddings once for all chunks.
-    """
 
     texts = [
         chunk["text"]
@@ -628,16 +660,10 @@ def create_embeddings(chunks):
 
 
 # ============================================================
-# CREATE FAISS INDEX
+# FAISS
 # ============================================================
 
 def create_faiss_index(embeddings):
-    """
-    Create FAISS cosine-similarity index.
-
-    Normalized embeddings + inner product
-    provide cosine similarity.
-    """
 
     dimension = embeddings.shape[1]
 
@@ -651,13 +677,10 @@ def create_faiss_index(embeddings):
 
 
 # ============================================================
-# KEYWORD SEARCH
+# TOKENIZATION
 # ============================================================
 
 def tokenize(text):
-    """
-    Simple keyword tokenizer.
-    """
 
     words = re.findall(
         r"\b[a-zA-Z0-9]+\b",
@@ -694,14 +717,14 @@ def tokenize(text):
     ]
 
 
+# ============================================================
+# KEYWORD SCORE
+# ============================================================
+
 def keyword_score(
     question,
     chunk_text
 ):
-    """
-    Score chunk based on matching
-    important question words.
-    """
 
     question_words = set(
         tokenize(question)
@@ -714,8 +737,10 @@ def keyword_score(
     if not question_words:
         return 0.0
 
-    matches = question_words.intersection(
-        chunk_words
+    matches = (
+        question_words.intersection(
+            chunk_words
+        )
     )
 
     return (
@@ -732,10 +757,6 @@ def hybrid_search(
     question,
     top_k=TOP_K
 ):
-    """
-    Combine semantic FAISS search
-    and keyword search.
-    """
 
     chunks = st.session_state.chunks
 
@@ -743,10 +764,6 @@ def hybrid_search(
 
     if not chunks or index is None:
         return []
-
-    # --------------------------------------------------------
-    # SEMANTIC SEARCH
-    # --------------------------------------------------------
 
     question_embedding = embedding_model.encode(
         [question],
@@ -778,10 +795,6 @@ def hybrid_search(
             int(index_number)
         ] = float(score)
 
-    # --------------------------------------------------------
-    # KEYWORD SEARCH
-    # --------------------------------------------------------
-
     results = []
 
     for index_number, chunk in enumerate(
@@ -798,7 +811,6 @@ def hybrid_search(
             chunk["text"]
         )
 
-        # Hybrid weighting
         hybrid_score = (
             0.75 * semantic_score
             +
@@ -817,7 +829,7 @@ def hybrid_search(
         )
 
     results.sort(
-        key=lambda x: x["hybrid_score"],
+        key=lambda item: item["hybrid_score"],
         reverse=True
     )
 
@@ -829,9 +841,6 @@ def hybrid_search(
 # ============================================================
 
 def get_groq_client():
-    """
-    Read GROQ_API_KEY from Streamlit secrets.
-    """
 
     api_key = st.secrets.get(
         "GROQ_API_KEY"
@@ -853,10 +862,6 @@ def generate_answer(
     question,
     retrieved_chunks
 ):
-    """
-    Generate answer using only
-    retrieved document context.
-    """
 
     client = get_groq_client()
 
@@ -864,7 +869,7 @@ def generate_answer(
 
         return (
             "GROQ_API_KEY is not configured. "
-            "Please add GROQ_API_KEY to "
+            "Please add GROQ_API_KEY to your "
             "Streamlit secrets."
         )
 
@@ -905,15 +910,16 @@ the provided document context.
 
 Rules:
 
-1. Do not use outside knowledge.
-2. Do not invent information.
-3. If the answer is not available in the context,
-   clearly say:
+1. Use only the provided context.
+2. Do not use outside knowledge.
+3. Do not invent information.
+4. If the answer is not available in the context,
+   say exactly:
 
-   "The information is not available in
-   the provided documents."
+"The information is not available in the
+provided documents."
 
-4. Keep the answer clear and concise.
+5. Keep answers clear and concise.
 """
 
     user_prompt = f"""
@@ -928,7 +934,6 @@ USER QUESTION:
 
     response = client.chat.completions.create(
         model=GROQ_MODEL,
-
         messages=[
             {
                 "role": "system",
@@ -939,7 +944,6 @@ USER QUESTION:
                 "content": user_prompt
             }
         ],
-
         temperature=0,
         max_tokens=700
     )
@@ -952,17 +956,6 @@ USER QUESTION:
 # ============================================================
 
 def process_documents(documents):
-    """
-    Complete processing pipeline:
-
-    extraction
-        ↓
-    chunking
-        ↓
-    embeddings
-        ↓
-    FAISS
-    """
 
     chunks = chunk_text(
         documents
@@ -972,7 +965,7 @@ def process_documents(documents):
         return False
 
     with st.spinner(
-        "Creating document embeddings..."
+        "Building your document knowledge base..."
     ):
 
         embeddings = create_embeddings(
@@ -1001,22 +994,13 @@ def process_documents(documents):
 # ============================================================
 
 def load_from_google_drive(url):
-    """
-    Download public Google Drive file or folder.
-
-    Supports:
-    PDF
-    DOCX
-    TXT
-    MD
-    """
 
     temp_directory = tempfile.mkdtemp()
 
     try:
 
         # ----------------------------------------------------
-        # GOOGLE DRIVE FOLDER
+        # FOLDER
         # ----------------------------------------------------
 
         if "/folders/" in url:
@@ -1046,7 +1030,7 @@ def load_from_google_drive(url):
                     file_paths.append(path)
 
         # ----------------------------------------------------
-        # GOOGLE DRIVE FILE
+        # FILE
         # ----------------------------------------------------
 
         else:
@@ -1084,7 +1068,7 @@ def load_from_google_drive(url):
                 ]
 
         # ----------------------------------------------------
-        # EXTRACT DOCUMENTS
+        # EXTRACTION
         # ----------------------------------------------------
 
         documents = []
@@ -1112,10 +1096,10 @@ def load_from_google_drive(url):
 
         return documents
 
-    except Exception as e:
+    except Exception as error:
 
         st.error(
-            f"Could not load Google Drive content: {e}"
+            f"Could not load Google Drive content: {error}"
         )
 
         return []
@@ -1126,16 +1110,17 @@ def load_from_google_drive(url):
 # ============================================================
 
 st.sidebar.markdown(
-    """
-    <div class="sidebar-title">
-        Document Sources
-    </div>
+    '<div class="sidebar-title">'
+    'Document Sources'
+    '</div>',
+    unsafe_allow_html=True
+)
 
-    <div class="sidebar-subtitle">
-        Upload files or connect a public
-        Google Drive source.
-    </div>
-    """,
+st.sidebar.markdown(
+    '<div class="sidebar-description">'
+    'Upload files or connect a public Google Drive '
+    'source to build your knowledge base.'
+    '</div>',
     unsafe_allow_html=True
 )
 
@@ -1145,11 +1130,14 @@ st.sidebar.markdown(
 # ============================================================
 
 st.sidebar.markdown(
-    "### 📁 Local Documents"
+    '<div class="sidebar-heading">'
+    '📁 Local Documents'
+    '</div>',
+    unsafe_allow_html=True
 )
 
 uploaded_files = st.sidebar.file_uploader(
-    "Upload PDF, DOCX, TXT or MD files",
+    "Upload PDF, DOCX, TXT or MD",
     type=[
         "pdf",
         "docx",
@@ -1160,15 +1148,22 @@ uploaded_files = st.sidebar.file_uploader(
     label_visibility="collapsed"
 )
 
+if uploaded_files:
+
+    st.sidebar.success(
+        f"{len(uploaded_files)} file(s) selected"
+    )
+
 
 # ============================================================
-# GOOGLE DRIVE INPUT
+# GOOGLE DRIVE
 # ============================================================
-
-st.sidebar.markdown("---")
 
 st.sidebar.markdown(
-    "### ☁️ Google Drive"
+    '<div class="sidebar-heading">'
+    '☁️ Google Drive'
+    '</div>',
+    unsafe_allow_html=True
 )
 
 drive_url = st.sidebar.text_input(
@@ -1177,7 +1172,7 @@ drive_url = st.sidebar.text_input(
 )
 
 st.sidebar.caption(
-    "Supported: PDF, DOCX, TXT and MD"
+    "Supported: PDF • DOCX • TXT • MD"
 )
 
 
@@ -1185,15 +1180,17 @@ st.sidebar.caption(
 # PROCESS BUTTON
 # ============================================================
 
+st.sidebar.markdown("")
+
 process_button = st.sidebar.button(
     "⚡ Process Documents",
-    use_container_width=True,
-    type="primary"
+    type="primary",
+    use_container_width=True
 )
 
 
 # ============================================================
-# PROCESS BUTTON LOGIC
+# PROCESS DOCUMENTS
 # ============================================================
 
 if process_button:
@@ -1201,20 +1198,20 @@ if process_button:
     all_documents = []
 
     # --------------------------------------------------------
-    # LOCAL UPLOADS
+    # LOCAL FILES
     # --------------------------------------------------------
 
     if uploaded_files:
 
         for uploaded_file in uploaded_files:
 
-            file_suffix = Path(
+            suffix = Path(
                 uploaded_file.name
             ).suffix.lower()
 
             with tempfile.NamedTemporaryFile(
                 delete=False,
-                suffix=file_suffix
+                suffix=suffix
             ) as temp_file:
 
                 temp_file.write(
@@ -1253,7 +1250,7 @@ if process_button:
             )
 
     # --------------------------------------------------------
-    # PROCESS EVERYTHING
+    # PROCESS
     # --------------------------------------------------------
 
     if all_documents:
@@ -1265,7 +1262,7 @@ if process_button:
         if success:
 
             st.sidebar.success(
-                "Documents processed successfully."
+                "Knowledge base ready."
             )
 
     else:
@@ -1276,37 +1273,14 @@ if process_button:
 
 
 # ============================================================
-# DOCUMENT INFORMATION
+# KNOWLEDGE BASE
 # ============================================================
 
 if st.session_state.documents:
 
-    st.markdown(
-        """
-        <div class="card">
-
-            <div class="card-title">
-                📄 Knowledge Base
-            </div>
-
-            <div class="card-description">
-                Documents currently available
-                to the assistant.
-            </div>
-
-        """,
-        unsafe_allow_html=True
-    )
-
-    # --------------------------------------------------------
-    # UNIQUE DOCUMENTS
-    # --------------------------------------------------------
-
     unique_documents = {}
 
-    for document in (
-        st.session_state.documents
-    ):
+    for document in st.session_state.documents:
 
         filename = document["filename"]
 
@@ -1331,10 +1305,6 @@ if st.session_state.documents:
             document["text"]
         )
 
-    # --------------------------------------------------------
-    # METRICS
-    # --------------------------------------------------------
-
     total_documents = len(
         unique_documents
     )
@@ -1348,63 +1318,78 @@ if st.session_state.documents:
         for item in unique_documents.values()
     )
 
+
+    # --------------------------------------------------------
+    # SECTION
+    # --------------------------------------------------------
+
+    st.markdown(
+        '<div class="section">'
+        '<div class="section-title">'
+        '📄 Knowledge Base'
+        '</div>'
+        '<div class="section-description">'
+        'Your processed documents are ready for semantic '
+        'and keyword-based search.'
+        '</div>',
+        unsafe_allow_html=True
+    )
+
+
+    # --------------------------------------------------------
+    # METRICS
+    # --------------------------------------------------------
+
     col1, col2, col3 = st.columns(3)
 
     with col1:
 
         st.markdown(
-            f"""
-            <div class="metric-card">
-                <div class="metric-number">
-                    {total_documents}
-                </div>
-
-                <div class="metric-label">
-                    Documents
-                </div>
-            </div>
-            """,
+            f'<div class="metric-card">'
+            f'<div class="metric-value">'
+            f'{total_documents}'
+            f'</div>'
+            f'<div class="metric-label">'
+            f'Documents'
+            f'</div>'
+            f'</div>',
             unsafe_allow_html=True
         )
 
     with col2:
 
         st.markdown(
-            f"""
-            <div class="metric-card">
-                <div class="metric-number">
-                    {total_chunks}
-                </div>
-
-                <div class="metric-label">
-                    Chunks
-                </div>
-            </div>
-            """,
+            f'<div class="metric-card">'
+            f'<div class="metric-value">'
+            f'{total_chunks}'
+            f'</div>'
+            f'<div class="metric-label">'
+            f'Searchable Chunks'
+            f'</div>'
+            f'</div>',
             unsafe_allow_html=True
         )
 
     with col3:
 
         st.markdown(
-            f"""
-            <div class="metric-card">
-                <div class="metric-number">
-                    {total_characters:,}
-                </div>
-
-                <div class="metric-label">
-                    Characters
-                </div>
-            </div>
-            """,
+            f'<div class="metric-card">'
+            f'<div class="metric-value">'
+            f'{total_characters:,}'
+            f'</div>'
+            f'<div class="metric-label">'
+            f'Characters'
+            f'</div>'
+            f'</div>',
             unsafe_allow_html=True
         )
+
 
     st.markdown(
         "<br>",
         unsafe_allow_html=True
     )
+
 
     # --------------------------------------------------------
     # DOCUMENT LIST
@@ -1428,60 +1413,51 @@ if st.session_state.documents:
                 "Page information unavailable"
             )
 
+        safe_filename = html.escape(
+            filename
+        )
+
         st.markdown(
-            f"""
-            <div class="source-card">
-
-                <div class="source-file">
-                    📄 {filename}
-                </div>
-
-                <div class="source-page">
-                    {page_info}
-                    &nbsp; • &nbsp;
-                    {information["characters"]:,}
-                    characters
-                </div>
-
-            </div>
-            """,
+            f'<div class="document-card">'
+            f'<div class="document-name">'
+            f'📄 {safe_filename}'
+            f'</div>'
+            f'<div class="document-meta">'
+            f'{page_info} &nbsp;•&nbsp; '
+            f'{information["characters"]:,} characters'
+            f'</div>'
+            f'</div>',
             unsafe_allow_html=True
         )
 
+
     st.markdown(
-        "</div>",
+        '</div>',
         unsafe_allow_html=True
     )
 
 
 # ============================================================
-# ASK QUESTION SECTION
+# ASK DOCUMENTS
 # ============================================================
 
 st.markdown(
-    """
-    <div class="card">
-
-        <div class="card-title">
-            💬 Ask Your Documents
-        </div>
-
-        <div class="card-description">
-            Ask a question and the assistant will
-            search your documents for the most
-            relevant information.
-        </div>
-
-    """,
+    '<div class="section">'
+    '<div class="section-title">'
+    '💬 Ask Your Documents'
+    '</div>'
+    '<div class="section-description">'
+    'Ask a question about your uploaded documents. '
+    'The assistant retrieves the most relevant passages '
+    'before generating an answer.'
+    '</div>',
     unsafe_allow_html=True
 )
 
 
 question = st.text_input(
     "Question",
-    placeholder=(
-        "e.g. What is the annual leave policy?"
-    ),
+    placeholder="What is the annual leave policy?",
     label_visibility="collapsed"
 )
 
@@ -1494,13 +1470,13 @@ ask_button = st.button(
 
 
 st.markdown(
-    "</div>",
+    '</div>',
     unsafe_allow_html=True
 )
 
 
 # ============================================================
-# QUESTION ANSWERING
+# ANSWER QUESTION
 # ============================================================
 
 if ask_button:
@@ -1508,7 +1484,7 @@ if ask_button:
     if not st.session_state.processed:
 
         st.warning(
-            "Please process your documents first."
+            "Please upload and process documents first."
         )
 
     elif not question.strip():
@@ -1520,11 +1496,11 @@ if ask_button:
     else:
 
         # ----------------------------------------------------
-        # HYBRID SEARCH
+        # SEARCH
         # ----------------------------------------------------
 
         with st.spinner(
-            "Searching your documents..."
+            "Searching your knowledge base..."
         ):
 
             retrieved_chunks = hybrid_search(
@@ -1532,16 +1508,18 @@ if ask_button:
                 top_k=TOP_K
             )
 
+
         if not retrieved_chunks:
 
             st.warning(
-                "No relevant information was found."
+                "No relevant information was found "
+                "in the processed documents."
             )
 
         else:
 
             # ------------------------------------------------
-            # GROQ
+            # GENERATE
             # ------------------------------------------------
 
             with st.spinner(
@@ -1553,65 +1531,73 @@ if ask_button:
                     retrieved_chunks
                 )
 
+
+            # ------------------------------------------------
+            # SAFE HTML
+            # ------------------------------------------------
+
+            safe_question = html.escape(
+                question
+            )
+
+            safe_answer = html.escape(
+                answer
+            )
+
+
             # ------------------------------------------------
             # USER MESSAGE
             # ------------------------------------------------
 
             st.markdown(
-                f"""
-                <div class="chat-user">
-
-                    <div class="chat-user-label">
-                        YOU
-                    </div>
-
-                    <div class="chat-user-text">
-                        {question}
-                    </div>
-
-                </div>
-                """,
+                f'<div class="user-message">'
+                f'<div class="user-label">'
+                f'YOU'
+                f'</div>'
+                f'<div class="user-text">'
+                f'{safe_question}'
+                f'</div>'
+                f'</div>',
                 unsafe_allow_html=True
             )
 
+
             # ------------------------------------------------
-            # ASSISTANT MESSAGE
+            # AI MESSAGE
             # ------------------------------------------------
 
             st.markdown(
-                f"""
-                <div class="chat-assistant">
-
-                    <div class="chat-assistant-label">
-                        🤖 AI DOCUMENT ASSISTANT
-                    </div>
-
-                    <div class="chat-assistant-text">
-                        {answer}
-                    </div>
-
-                </div>
-                """,
+                f'<div class="ai-message">'
+                f'<div class="ai-label">'
+                f'🤖 AI DOCUMENT ASSISTANT'
+                f'</div>'
+                f'<div class="ai-text">'
+                f'{safe_answer}'
+                f'</div>'
+                f'</div>',
                 unsafe_allow_html=True
             )
+
 
             # ------------------------------------------------
             # SOURCES
             # ------------------------------------------------
 
             st.markdown(
-                """
-                <div class="source-header">
-                    📚 Retrieved Sources
-                </div>
-                """,
+                '<div class="sources-title">'
+                '📚 Retrieved Sources'
+                '</div>',
                 unsafe_allow_html=True
             )
 
-            st.caption(
-                f"{len(retrieved_chunks)} relevant "
-                "source chunks retrieved"
+            st.markdown(
+                f'<div class="sources-description">'
+                f'{len(retrieved_chunks)} relevant chunks '
+                f'used to generate this answer.'
+                f'</div>',
+                unsafe_allow_html=True
             )
+
 
             # ------------------------------------------------
             # SOURCE CARDS
@@ -1634,30 +1620,32 @@ if ask_button:
                         "Page information unavailable"
                     )
 
+                safe_filename = html.escape(
+                    source["filename"]
+                )
+
+                safe_text = html.escape(
+                    source["text"]
+                )
+
                 with st.expander(
-                    f"Source {i}  ·  "
-                    f"{source['filename']}  ·  "
+                    f"Source {i}  •  "
+                    f"{source['filename']}  •  "
                     f"{page_text}"
                 ):
 
                     st.markdown(
-                        f"""
-                        <div class="source-card">
-
-                            <div class="source-file">
-                                📄 {source['filename']}
-                            </div>
-
-                            <div class="source-page">
-                                {page_text}
-                            </div>
-
-                            <div class="source-text">
-                                {source['text']}
-                            </div>
-
-                        </div>
-                        """,
+                        f'<div class="source-box">'
+                        f'<div class="source-file">'
+                        f'📄 {safe_filename}'
+                        f'</div>'
+                        f'<div class="source-page">'
+                        f'{page_text}'
+                        f'</div>'
+                        f'<div class="source-text">'
+                        f'{safe_text}'
+                        f'</div>'
+                        f'</div>',
                         unsafe_allow_html=True
                     )
 
